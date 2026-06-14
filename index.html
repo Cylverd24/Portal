@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Renaud Express — Administration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#0B1F5E;--blue:#1A4FD8;--blue2:#2563EB;
+  --orange:#F5820A;--gold:#F9A825;--bg:#F2F5FB;
+  --surface:#fff;--text:#0F172A;--text2:#64748B;--text3:#94A3B8;
+  --green:#10b981;--border:#E2E8F0;
+  --font:'DM Sans',sans-serif;--fd:'Outfit',sans-serif;
+}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:var(--text)}
+.wrap{height:100vh;display:grid;grid-template-columns:1fr 1fr}
+
+/* LEFT */
+.left{display:flex;flex-direction:column;padding:36px 48px;background:var(--surface);position:relative;overflow:hidden}
+.left::after{content:'';position:absolute;bottom:-120px;left:-80px;width:320px;height:320px;border-radius:50%;background:radial-gradient(circle,rgba(26,79,216,.08),transparent 70%);pointer-events:none}
+.logo{display:flex;align-items:center;gap:10px;text-decoration:none;margin-bottom:auto}
+.logo-box{width:40px;height:40px;border-radius:12px;background:var(--navy);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;box-shadow:0 4px 14px rgba(11,31,94,.3)}
+.logo-name{font-family:var(--fd);font-size:17px;font-weight:800;color:var(--text);letter-spacing:-.3px}
+.hero{flex:1;display:flex;flex-direction:column;justify-content:center;padding:20px 0 40px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:700;color:var(--blue);letter-spacing:1px;text-transform:uppercase;margin-bottom:20px}
+.eyebrow-dot{width:6px;height:6px;border-radius:50%;background:var(--orange)}
+h1{font-family:var(--fd);font-size:clamp(40px,4.5vw,62px);font-weight:900;line-height:1.0;letter-spacing:-2px;color:var(--text);margin-bottom:10px}
+.h1-hl{position:relative;display:inline-block;color:var(--text)}
+.h1-hl::before{content:'';position:absolute;bottom:2px;left:-6px;right:-6px;height:28px;background:var(--gold);border-radius:6px;z-index:-1;transform:rotate(-.6deg);opacity:.85}
+.hero-sub{font-size:15px;color:var(--text2);line-height:1.7;max-width:380px;margin-bottom:40px;font-weight:300}
+.btn-cta{display:inline-flex;align-items:center;gap:12px;padding:16px 28px;background:var(--navy);color:#fff;border:none;border-radius:14px;font-size:15px;font-weight:700;font-family:var(--fd);cursor:pointer;text-decoration:none;transition:all .3s cubic-bezier(.34,1.56,.64,1);box-shadow:0 4px 20px rgba(11,31,94,.25);width:fit-content}
+.btn-cta:hover{background:var(--blue);transform:translateY(-3px);box-shadow:0 10px 32px rgba(26,79,216,.35)}
+.btn-arrow{width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:15px;transition:transform .2s}
+.btn-cta:hover .btn-arrow{transform:translateX(3px)}
+.social-proof{display:flex;align-items:center;gap:14px;margin-top:28px}
+.sp-avatars{display:flex}
+.sp-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--blue),var(--orange));border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--fd);margin-right:-8px}
+.sp-text{font-size:12px;color:var(--text2);font-weight:500;padding-left:14px}
+.sp-text strong{color:var(--text);font-weight:700}
+.bottom-row{display:flex;align-items:center;gap:32px;padding-top:24px;border-top:1px solid var(--border)}
+.br-stat h4{font-family:var(--fd);font-size:22px;font-weight:900;color:var(--text);letter-spacing:-.5px}
+.br-stat p{font-size:11px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+.br-div{width:1px;height:36px;background:var(--border)}
+
+/* RIGHT */
+.right{background:var(--gold);border-radius:28px 0 0 28px;margin:16px 0 16px -16px;padding:36px 40px;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.right::before{content:'';position:absolute;top:-80px;right:-80px;width:240px;height:240px;border-radius:50%;background:rgba(255,255,255,.2);pointer-events:none}
+.right::after{content:'';position:absolute;bottom:-100px;left:-60px;width:280px;height:280px;border-radius:50%;background:rgba(11,31,94,.07);pointer-events:none}
+.right-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;position:relative;z-index:1}
+.right-tag{font-size:11px;font-weight:700;color:var(--navy);letter-spacing:.8px;text-transform:uppercase;opacity:.7}
+.live-badge{background:var(--navy);color:#fff;font-size:11px;font-weight:700;padding:5px 14px;border-radius:20px;display:flex;align-items:center;gap:6px}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 2px rgba(16,185,129,.3);animation:lp 2s ease infinite}
+@keyframes lp{0%,100%{box-shadow:0 0 0 2px rgba(16,185,129,.3)}50%{box-shadow:0 0 0 5px rgba(16,185,129,.1)}}
+.main-card{background:var(--surface);border-radius:24px;padding:24px;box-shadow:0 16px 48px rgba(11,31,94,.18);position:relative;z-index:1;flex:1;display:flex;flex-direction:column;overflow:hidden;margin-bottom:14px}
+.main-card::before{content:'';position:absolute;top:0;right:0;width:160px;height:160px;background:radial-gradient(circle at 80% 10%,rgba(249,168,37,.2),transparent 70%);pointer-events:none}
+.mc-hdr{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px}
+.mc-title-sm{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px}
+.mc-title{font-family:var(--fd);font-size:24px;font-weight:900;color:var(--text);letter-spacing:-.5px;line-height:1.1}
+.mc-title span{color:var(--blue)}
+.mc-nav{display:flex;gap:6px}
+.mc-btn{width:32px;height:32px;border-radius:8px;border:1.5px solid var(--border);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--text2);transition:all .2s}
+.mc-btn:hover{background:var(--bg);border-color:var(--blue);color:var(--blue)}
+.svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex:1}
+.svc-card{background:var(--bg);border-radius:16px;padding:16px 14px;display:flex;flex-direction:column;gap:4px;border:1.5px solid transparent;transition:all .25s;cursor:default}
+.svc-card:hover{border-color:rgba(26,79,216,.2);transform:translateY(-3px);box-shadow:0 8px 24px rgba(26,79,216,.1)}
+.svc-card.ft{background:var(--navy)}
+.svc-card.ft:hover{border-color:transparent;box-shadow:0 8px 24px rgba(11,31,94,.3)}
+.svc-icon{font-size:28px;margin-bottom:6px;filter:drop-shadow(0 3px 6px rgba(0,0,0,.12))}
+.svc-name{font-size:13px;font-weight:700;color:var(--text)}
+.svc-card.ft .svc-name{color:#fff}
+.svc-count{font-family:var(--fd);font-size:20px;font-weight:900;color:var(--blue)}
+.svc-card.ft .svc-count{color:var(--gold)}
+.svc-lbl{font-size:10px;color:var(--text3);font-weight:500}
+.svc-card.ft .svc-lbl{color:rgba(255,255,255,.5)}
+.bc-row{display:flex;gap:10px;position:relative;z-index:1}
+.bc{flex:1;background:var(--surface);border-radius:18px;padding:14px 16px;box-shadow:0 4px 16px rgba(11,31,94,.1);display:flex;align-items:center;gap:12px}
+.bc-icon{width:38px;height:38px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:17px}
+.bc-icon.bl{background:rgba(26,79,216,.1)}
+.bc-icon.or{background:rgba(245,130,10,.1)}
+.bc-icon.gr{background:rgba(16,185,129,.1)}
+.bc-info h4{font-family:var(--fd);font-size:17px;font-weight:900;color:var(--text);letter-spacing:-.5px}
+.bc-info p{font-size:10px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-top:1px}
+
+/* ANIMATIONS */
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeR{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:translateX(0)}}
+@keyframes scaleIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+.logo{animation:fadeR .5s ease both}
+.eyebrow{animation:fadeUp .6s .1s ease both}
+h1{animation:fadeUp .6s .15s ease both}
+.hero-sub{animation:fadeUp .6s .2s ease both}
+.btn-cta{animation:fadeUp .6s .25s ease both}
+.social-proof{animation:fadeUp .6s .3s ease both}
+.bottom-row{animation:fadeUp .6s .35s ease both}
+.right{animation:scaleIn .7s .05s ease both}
+.main-card{animation:fadeUp .7s .2s ease both}
+.bc-row{animation:fadeUp .7s .35s ease both}
+
+/* MOBILE */
+@media(max-width:860px){
+  html,body{overflow:auto}
+  .wrap{grid-template-columns:1fr;height:auto}
+  .right{border-radius:0 0 28px 28px;margin:0;padding:28px 24px}
+  .left{padding:28px 24px}
+  h1{font-size:42px}
+  .bottom-row{gap:20px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- LEFT -->
+  <div class="left">
+    <a href="#" class="logo">
+      <div class="logo-box">🏍️</div>
+      <span class="logo-name">Renaud Express</span>
+    </a>
+
+    <div class="hero">
+      <div class="eyebrow"><span class="eyebrow-dot"></span>Panel d'administration</div>
+
+      <h1>La solution<br/><span class="h1-hl">#1</span> pour<br/>Libreville</h1>
+
+      <p class="hero-sub">Gérez vos commandes, livreurs, restaurants et clients depuis un seul tableau de bord. Simple, rapide, efficace.</p>
+
+      <a href="./admin-panel.html" class="btn-cta">
+        Se connecter
+        <div class="btn-arrow">→</div>
+      </a>
+
+      <div class="social-proof">
+        <div class="sp-avatars">
+          <div class="sp-avatar">A</div>
+          <div class="sp-avatar" style="background:linear-gradient(135deg,var(--orange),var(--gold))">R</div>
+          <div class="sp-avatar" style="background:linear-gradient(135deg,var(--green),#059669)">L</div>
+        </div>
+        <p class="sp-text"><strong>Admins, agents &amp; livreurs</strong><br/>connectés chaque jour</p>
+      </div>
+    </div>
+
+    <div class="bottom-row">
+      <div class="br-stat"><h4>6</h4><p>Restaurants</p></div>
+      <div class="br-div"></div>
+      <div class="br-stat"><h4>4</h4><p>Magasins</p></div>
+      <div class="br-div"></div>
+      <div class="br-stat"><h4>3</h4><p>Pharmacies</p></div>
+      <div class="br-div"></div>
+      <div class="br-stat"><h4>24/7</h4><p>Disponibilité</p></div>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="right">
+    <div class="right-top">
+      <span class="right-tag">Services actifs</span>
+      <div class="live-badge"><div class="live-dot"></div>En ligne</div>
+    </div>
+
+    <div class="main-card">
+      <div class="mc-hdr">
+        <div>
+          <div class="mc-title-sm">Tableau de bord</div>
+          <div class="mc-title">Renaud<br/><span>Express</span></div>
+        </div>
+        <div class="mc-nav">
+          <button class="mc-btn">←</button>
+          <button class="mc-btn">→</button>
+        </div>
+      </div>
+
+      <div class="svc-grid">
+        <div class="svc-card ft">
+          <span class="svc-icon">📦</span>
+          <div class="svc-name">Commandes</div>
+          <div class="svc-count">Live</div>
+          <div class="svc-lbl">Temps réel</div>
+        </div>
+        <div class="svc-card">
+          <span class="svc-icon">🍽️</span>
+          <div class="svc-name">Restaurants</div>
+          <div class="svc-count">6</div>
+          <div class="svc-lbl">Partenaires</div>
+        </div>
+        <div class="svc-card">
+          <span class="svc-icon">🏍️</span>
+          <div class="svc-name">Livreurs</div>
+          <div class="svc-count">Flotte</div>
+          <div class="svc-lbl">GPS tracké</div>
+        </div>
+        <div class="svc-card">
+          <span class="svc-icon">👥</span>
+          <div class="svc-name">Clients</div>
+          <div class="svc-count">CRM</div>
+          <div class="svc-lbl">Gestion complète</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bc-row">
+      <div class="bc">
+        <div class="bc-icon bl">💊</div>
+        <div class="bc-info"><h4>3</h4><p>Pharmacies</p></div>
+      </div>
+      <div class="bc">
+        <div class="bc-icon or">🛒</div>
+        <div class="bc-info"><h4>4</h4><p>Magasins</p></div>
+      </div>
+      <div class="bc">
+        <div class="bc-icon gr">📍</div>
+        <div class="bc-info"><h4>GPS</h4><p>Suivi live</p></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
