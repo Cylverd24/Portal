@@ -6,7 +6,7 @@
   <meta http-equiv="X-Content-Type-Options" content="nosniff"/>
   <meta http-equiv="X-Frame-Options" content="DENY"/>
   <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin"/>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com https://*.supabase.co https://*.tile.openstreetmap.org; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://wa.me https://www.google.com https://nominatim.openstreetmap.org; frame-ancestors 'none';"/>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com https://*.supabase.co https://*.tile.openstreetmap.org; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://wa.me https://www.google.com https://nominatim.openstreetmap.org; media-src 'self' blob: https://*.supabase.co; frame-ancestors 'none';"/>
 <title>Renaud Express — Admin</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -2280,9 +2280,30 @@ const ZONES_DEFAULT = [
 ];
 
 let _services = SERVICES_DEFAULT;
-let _zones    = JSON.parse(localStorage.getItem('re_zones')||JSON.stringify(ZONES_DEFAULT));
+let _zones = [];
+
+async function loadDeliveryZones() {
+  const { data } = await sb.from('delivery_zones').select('*').order('sort_order');
+  _zones = data || [];
+}
+
+async function saveDeliveryZones() {
+  // Upsert toutes les zones
+  const { error } = await sb.from('delivery_zones').upsert(_zones.map(z => ({
+    id:             z.id,
+    name:           z.name,
+    price_standard: z.price_standard,
+    price_express:  z.price_express,
+    delay:          z.delay,
+    active:         z.active,
+    sort_order:     z.sort_order || 0
+  })));
+  if (error) { toast('Erreur sauvegarde zones : ' + error.message, 'error'); return; }
+  toast('Configuration services & tarifs enregistrée');
+}
 
 async function loadServices() {
+  await loadDeliveryZones();
   // Charger depuis la table Supabase `services`
   const { data, error } = await sb.from('services').select('*').order('sort_order');
   if (!error && data && data.length) {
@@ -2327,20 +2348,26 @@ async function toggleService(id, active) {
 function updateServiceFee(id, val) { _services = _services.map(s=>s.id===id?{...s,fee_base:Number(val)}:s); }
 function updateZone(id, key, val) {
   _zones = _zones.map(z=>z.id===id?{...z,[key]:key==='active'?val:(key.startsWith('price')?Number(val):val)}:z);
+  // Sauvegarde immédiate en base
+  const zone = _zones.find(z=>z.id===id);
+  if (zone) sb.from('delivery_zones').update({[key]:key==='active'?val:(key.startsWith('price')?Number(val):val)}).eq('id',id).then(({error})=>{if(error)console.warn('Zone update error:',error.message);});
 }
-function addDeliveryZone() {
-  const id = 'z'+Date.now();
-  _zones.push({id,name:'Nouvelle zone',price_standard:1500,price_express:2000,delay:'30-45 min',active:true});
-  loadServices();
+async function addDeliveryZone() {
+  const newZ = {name:'Nouvelle zone',price_standard:1500,price_express:2000,delay:'30-45 min',active:true,sort_order:_zones.length+1};
+  const {data, error} = await sb.from('delivery_zones').insert(newZ).select().single();
+  if (error) return toast('Erreur : '+error.message,'error');
+  _zones.push(data); loadServices();
 }
-function deleteZone(id) { _zones=_zones.filter(z=>z.id!==id); loadServices(); }
+async function deleteZone(id) {
+  await sb.from('delivery_zones').delete().eq('id',id);
+  _zones=_zones.filter(z=>z.id!==id); loadServices();
+}
 async function saveServicesConfig() {
   // Sauvegarder les frais dans Supabase
   const updates = _services.map(s => sb.from('services').update({fee:s.fee_base, active:s.active}).eq('id',s.id));
   await Promise.all(updates);
   // Zones restent en localStorage
-  localStorage.setItem('re_zones', JSON.stringify(_zones));
-  toast('Configuration services & tarifs enregistrée');
+  await saveDeliveryZones();
 }
 
 // ── MAGASINS ───────────────────────────────────
@@ -3382,8 +3409,13 @@ function _showActiveOrder(o) {
   } else {
     tot.textContent = `✅ Paiement mobile effectué — ${fmt(o.total)} F CFA`;
   }
-  // Store delivery code for validation
+  // Store delivery code for validation — reset systématiquement à chaque nouvelle commande
   window._activeDeliveryCode = o.delivery_code || null;
+  window._codeValidated      = false;
+  drvStopQrScanner();
+  drvSwitchValidMode('code', null);
+  const resultEl = document.getElementById('drv-code-result');
+  if (resultEl) resultEl.style.display = 'none';
 }
 
 function _renderMissions(assigned, available) {
@@ -3457,36 +3489,144 @@ async function drvMarkDelivered() {
   if (order?.client_id) await sb.from('notifications').insert({user_id:order.client_id,user_type:'client',
     message:`✅ Votre commande a été livrée par ${currentUser.name} ! Merci — Renaud Express 🇬🇦`,type:'order_delivered',read:false});
   _activeOrderId=null; _lastClientNotifTime=0; window._activeDeliveryCode=null; window._codeValidated=false;
+  drvStopQrScanner();
   document.getElementById('drv-active-order').style.display='none';
   toast('✅ Livraison confirmée ! 🎉'); loadDriverMissions();
 }
 
+// ── Validation par code ou QR ──────────────
+let _qrScanInterval = null;
+let _qrStream        = null;
+
+function drvSwitchValidMode(mode, btn) {
+  // UI switch
+  document.getElementById('drv-mode-code').style.display = mode === 'code' ? 'block' : 'none';
+  document.getElementById('drv-mode-scan').style.display = mode === 'scan' ? 'block' : 'none';
+  document.getElementById('drv-mode-code-btn').style.background = mode === 'code' ? 'rgba(59,130,246,.2)'   : 'rgba(255,255,255,.07)';
+  document.getElementById('drv-mode-code-btn').style.borderColor = mode === 'code' ? '#3B82F6' : 'rgba(255,255,255,.15)';
+  document.getElementById('drv-mode-code-btn').style.color = mode === 'code' ? '#60a5fa' : 'rgba(255,255,255,.5)';
+  document.getElementById('drv-mode-scan-btn').style.background = mode === 'scan' ? 'rgba(59,130,246,.2)'   : 'rgba(255,255,255,.07)';
+  document.getElementById('drv-mode-scan-btn').style.borderColor = mode === 'scan' ? '#3B82F6' : 'rgba(255,255,255,.15)';
+  document.getElementById('drv-mode-scan-btn').style.color = mode === 'scan' ? '#60a5fa' : 'rgba(255,255,255,.5)';
+  if (mode === 'scan') drvStartQrScanner();
+  else drvStopQrScanner();
+}
+
+async function drvStartQrScanner() {
+  const video  = document.getElementById('drv-qr-video');
+  const status = document.getElementById('drv-qr-status');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    status.textContent = '❌ Caméra non supportée sur cet appareil';
+    return;
+  }
+  try {
+    _qrStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } }
+    });
+    video.srcObject = _qrStream;
+    status.textContent = '📷 Pointez vers le QR code du client...';
+    // Charger jsQR si pas encore disponible
+    if (typeof jsQR === 'undefined') {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+        s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+    _drvScanQrFrame();
+  } catch(e) {
+    status.textContent = '❌ Accès caméra refusé — utilisez la saisie manuelle';
+    console.warn('Camera error:', e);
+  }
+}
+
+function _drvScanQrFrame() {
+  const video  = document.getElementById('drv-qr-video');
+  const canvas = document.getElementById('drv-qr-canvas-scan');
+  const status = document.getElementById('drv-qr-status');
+  if (!video || !canvas || !_qrStream) return;
+
+  const ctx = canvas.getContext('2d');
+  function scan() {
+    if (!_qrStream || !video.readyState || video.readyState < 2) {
+      _qrScanInterval = requestAnimationFrame(scan); return;
+    }
+    canvas.width  = video.videoWidth  || 320;
+    canvas.height = video.videoHeight || 320;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    try {
+      const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts:'dontInvert' });
+      if (code && code.data) {
+        drvStopQrScanner();
+        _drvHandleQrResult(code.data);
+        return;
+      }
+    } catch(e) {}
+    _qrScanInterval = requestAnimationFrame(scan);
+  }
+  _qrScanInterval = requestAnimationFrame(scan);
+}
+
+function drvStopQrScanner() {
+  if (_qrScanInterval) { cancelAnimationFrame(_qrScanInterval); _qrScanInterval = null; }
+  if (_qrStream) { _qrStream.getTracks().forEach(t => t.stop()); _qrStream = null; }
+  const video = document.getElementById('drv-qr-video');
+  if (video) { video.srcObject = null; }
+}
+
+function _drvHandleQrResult(data) {
+  // Le QR code encode le code à 4 chiffres — extraire les digits
+  const digits = (data || '').replace(/\D/g,'').slice(-4).padStart(4,'0');
+  const expected = (window._activeDeliveryCode || '').toString().padStart(4,'0');
+  _drvShowCodeResult(digits, expected);
+}
+
 function drvValidateCode() {
   const input = document.getElementById('drv-code-input');
-  const entered = (input?.value || '').trim();
-  const expected = window._activeDeliveryCode;
+  const raw   = (input?.value || '').trim();
+  const entered  = raw.padStart(4, '0').slice(-4);
+  const expected = (window._activeDeliveryCode || '').toString().padStart(4, '0').slice(-4);
 
-  if (!expected) {
-    // Pas de code — laisser confirmer directement
+  if (!window._activeDeliveryCode) {
     window._codeValidated = true;
-    if (input) { input.style.borderColor = '#10b981'; input.value = '✓ OK'; }
-    toast('✅ Livraison prête à confirmer');
+    if (input) { input.style.borderColor='#10b981'; input.style.background='rgba(16,185,129,.15)'; input.placeholder='✓ OK'; input.value=''; }
+    _showCodeResultUI(true, 'Livraison prête à confirmer');
     return;
   }
-  if (!entered || entered.length !== 4) {
-    toast('Saisissez le code à 4 chiffres', 'error');
+  if (!raw || raw.replace(/\D/g,'').length < 1) {
+    toast('Saisissez le code à 4 chiffres du client', 'error');
     if (input) input.style.borderColor = '#EF4444';
     return;
   }
-  if (entered === expected) {
-    window._codeValidated = true;
-    if (input) { input.style.borderColor = '#10b981'; input.style.background = 'rgba(16,185,129,.15)'; }
-    toast('🔓 Code correct ! Vous pouvez confirmer la livraison');
+  _drvShowCodeResult(entered, expected);
+}
+
+function _drvShowCodeResult(entered, expected) {
+  const ok = entered === expected || !window._activeDeliveryCode;
+  window._codeValidated = ok;
+  if (ok) {
+    const input = document.getElementById('drv-code-input');
+    if (input) { input.style.borderColor='#10b981'; input.style.background='rgba(16,185,129,.15)'; }
+    _showCodeResultUI(true, '🔓 Code confirmé — vous pouvez valider la livraison');
   } else {
-    window._codeValidated = false;
-    if (input) input.style.borderColor = '#EF4444';
-    toast('❌ Code incorrect — Demandez au client', 'error');
+    const input = document.getElementById('drv-code-input');
+    if (input) { input.style.borderColor='#EF4444'; input.style.background='rgba(239,68,68,.1)'; }
+    _showCodeResultUI(false, '❌ Code incorrect (' + entered + ' ≠ ' + expected + ')');
   }
+}
+
+function _showCodeResultUI(ok, msg) {
+  const el = document.getElementById('drv-code-result');
+  if (!el) return;
+  el.style.display = 'block';
+  el.style.background = ok ? 'rgba(16,185,129,.2)' : 'rgba(239,68,68,.15)';
+  el.style.border = ok ? '1px solid rgba(16,185,129,.4)' : '1px solid rgba(239,68,68,.3)';
+  el.style.color = ok ? '#34d399' : '#f87171';
+  el.textContent = msg;
+  if (ok) toast('🔓 Code correct — confirmez la livraison');
+  else    toast(msg, 'error');
 }
 
 let _transferReason=null;
@@ -4277,15 +4417,48 @@ async function saveImgModal() {
 
         <!-- Code de confirmation -->
         <div style="background:rgba(0,0,0,.3);border-radius:14px;padding:14px;margin-bottom:10px;border:1.5px solid rgba(59,130,246,.3)">
-          <p style="font-size:10px;font-weight:900;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🔑 Code de confirmation client</p>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input id="drv-code-input" type="number" maxlength="4" placeholder="0000"
-              style="flex:1;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.15);border-radius:10px;padding:12px 14px;color:#fff;font-size:22px;font-weight:900;letter-spacing:8px;text-align:center;outline:none;font-family:monospace;-moz-appearance:textfield"
-              oninput="this.value=this.value.slice(0,4)"
-              onfocus="this.style.borderColor='#3B82F6'" onblur="this.style.borderColor='rgba(255,255,255,.15)'"/>
-            <button onclick="drvValidateCode()" class="drv-btn primary" style="padding:12px 16px;font-size:16px">✓</button>
+          <p style="font-size:10px;font-weight:900;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🔑 Confirmation de livraison</p>
+
+          <!-- Tabs -->
+          <div style="display:flex;gap:6px;margin-bottom:12px">
+            <button onclick="drvSwitchValidMode('code',this)" id="drv-mode-code-btn"
+              style="flex:1;padding:8px;border-radius:9px;font-size:11px;font-weight:800;border:1.5px solid #3B82F6;background:rgba(59,130,246,.2);color:#60a5fa;cursor:pointer;font-family:var(--font)">
+              ⌨️ Saisir code
+            </button>
+            <button onclick="drvSwitchValidMode('scan',this)" id="drv-mode-scan-btn"
+              style="flex:1;padding:8px;border-radius:9px;font-size:11px;font-weight:800;border:1.5px solid rgba(255,255,255,.15);background:rgba(255,255,255,.07);color:rgba(255,255,255,.5);cursor:pointer;font-family:var(--font)">
+              📷 Scanner QR
+            </button>
           </div>
-          <p style="font-size:10px;color:rgba(255,255,255,.35);margin-top:8px;text-align:center">Demandez ce code au client avant de confirmer</p>
+
+          <!-- Mode Saisie manuelle -->
+          <div id="drv-mode-code">
+            <div style="display:flex;gap:8px;align-items:center">
+              <input id="drv-code-input" type="number" maxlength="4" placeholder="0000"
+                style="flex:1;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.15);border-radius:10px;padding:12px 14px;color:#fff;font-size:22px;font-weight:900;letter-spacing:8px;text-align:center;outline:none;font-family:monospace;-moz-appearance:textfield"
+                oninput="this.value=this.value.slice(0,4)"
+                onfocus="this.style.borderColor='#3B82F6'" onblur="this.style.borderColor='rgba(255,255,255,.15)'"/>
+              <button onclick="drvValidateCode()" class="drv-btn primary" style="padding:12px 16px;font-size:16px">✓</button>
+            </div>
+            <p style="font-size:10px;color:rgba(255,255,255,.35);margin-top:8px;text-align:center">Demandez le code à 4 chiffres au client</p>
+          </div>
+
+          <!-- Mode Scanner QR -->
+          <div id="drv-mode-scan" style="display:none">
+            <div style="position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:1">
+              <video id="drv-qr-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
+              <canvas id="drv-qr-canvas-scan" style="display:none"></canvas>
+              <!-- Viseur -->
+              <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
+                <div style="width:60%;height:60%;border:3px solid #3B82F6;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.5)"></div>
+              </div>
+              <div id="drv-qr-status" style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.7);color:#fff;font-size:11px;font-weight:700;padding:8px;text-align:center">📷 Pointez vers le QR code du client</div>
+            </div>
+            <button onclick="drvStopQrScanner()" style="margin-top:8px;width:100%;padding:9px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font)">⏹ Arrêter le scanner</button>
+          </div>
+
+          <!-- Résultat validation -->
+          <div id="drv-code-result" style="display:none;margin-top:10px;padding:10px 14px;border-radius:10px;text-align:center;font-size:13px;font-weight:800"></div>
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px">
