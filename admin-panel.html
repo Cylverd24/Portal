@@ -893,6 +893,58 @@ input:checked + .toggle-slider:before{transform:translateX(20px)}
         </div>
       </div>
     </div>
+
+    <!-- ── DIAGNOSTIC RLS ── -->
+    <div class="settings-section" style="margin-top:20px;border:2px solid #fbbf24;background:#fffbeb;border-radius:12px;padding:18px">
+      <div class="settings-title" style="color:#92400e">🔐 Diagnostic & Correction RLS Supabase</div>
+      <p style="font-size:12px;color:#78350f;margin-bottom:14px">
+        Ce panel utilise la clé <code>anon</code> sans session Supabase Auth. Pour que l'admin puisse lire/écrire les tables,
+        des <b>Row Level Security policies</b> permissives doivent être configurées. Copiez et exécutez le SQL ci-dessous
+        dans <b>Supabase → SQL Editor</b>.
+      </p>
+      <div id="rls-diag-results" style="margin-bottom:12px"></div>
+      <button class="btn btn-blue" onclick="testRlsAccess()" style="margin-bottom:12px">🔍 Tester l'accès aux tables</button>
+      <div style="background:#1e1e2e;border-radius:10px;padding:14px;position:relative">
+        <button onclick="copyRlsSql()" style="position:absolute;top:10px;right:10px;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:700">📋 Copier</button>
+        <pre id="rls-sql-block" style="color:#a6e22e;font-size:11px;margin:0;white-space:pre-wrap;font-family:monospace">-- ═══════════════════════════════════════════════
+-- RENAUD EXPRESS — Fix RLS pour admin (clé anon)
+-- Exécuter dans Supabase → SQL Editor
+-- ═══════════════════════════════════════════════
+
+-- 1. TABLE CLIENTS (lecture admin)
+DROP POLICY IF EXISTS "admin_read_clients" ON clients;
+CREATE POLICY "admin_read_clients"
+  ON clients FOR SELECT TO anon
+  USING (true);
+
+-- 2. TABLE DELIVERY_ZONES (lecture publique + écriture admin)
+DROP POLICY IF EXISTS "public_read_delivery_zones" ON delivery_zones;
+CREATE POLICY "public_read_delivery_zones"
+  ON delivery_zones FOR SELECT TO anon
+  USING (true);
+
+DROP POLICY IF EXISTS "admin_insert_delivery_zones" ON delivery_zones;
+CREATE POLICY "admin_insert_delivery_zones"
+  ON delivery_zones FOR INSERT TO anon
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "admin_update_delivery_zones" ON delivery_zones;
+CREATE POLICY "admin_update_delivery_zones"
+  ON delivery_zones FOR UPDATE TO anon
+  USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "admin_delete_delivery_zones" ON delivery_zones;
+CREATE POLICY "admin_delete_delivery_zones"
+  ON delivery_zones FOR DELETE TO anon
+  USING (true);
+
+-- 3. TABLE SERVICES (écriture admin)
+DROP POLICY IF EXISTS "admin_update_services" ON services;
+CREATE POLICY "admin_update_services"
+  ON services FOR UPDATE TO anon
+  USING (true) WITH CHECK (true);</pre>
+      </div>
+    </div>
   </div>
 
   <!-- ── MAGASINS ── -->
@@ -1892,7 +1944,13 @@ async function assignDriver(orderId, driverId, driverName) {
 
 // ── CLIENTS ────────────────────────────────────
 async function loadClients() {
-  const { data } = await sb.from('clients').select('*').order('joined_at',{ascending:false});
+  const { data, error } = await sb.from('clients').select('*').order('joined_at',{ascending:false});
+  if (error) {
+    console.error('[clients] Erreur chargement:', error.message);
+    document.getElementById('clients-tbody').innerHTML = `<tr><td colspan="9"><div class="empty"><div class="empty-icon">⚠️</div><p style="color:#ef4444;font-weight:700">Erreur RLS : ${esc(error.message)}</p><p style="font-size:12px;color:#94a3b8;margin-top:6px">Vérifiez les policies Supabase sur la table <code>clients</code></p></div></td></tr>`;
+    document.getElementById('clients-count-label').textContent = 'Erreur de chargement';
+    return;
+  }
   _clientsAll = data||[];
   document.getElementById('clients-count-label').textContent = _clientsAll.length + ' clients inscrits';
   renderClients(_clientsAll);
@@ -2298,8 +2356,12 @@ async function saveDeliveryZones() {
     active:         z.active,
     sort_order:     z.sort_order || 0
   })));
-  if (error) { toast('Erreur sauvegarde zones : ' + error.message, 'error'); return; }
-  toast('Configuration services & tarifs enregistrée');
+  if (error) {
+    console.error('[delivery_zones] Erreur upsert:', error.message);
+    toast('❌ Erreur sauvegarde zones : ' + error.message + ' — Vérifiez les policies RLS sur delivery_zones', 'error');
+    return;
+  }
+  toast('✅ Configuration services & tarifs enregistrée');
 }
 
 async function loadServices() {
@@ -2580,6 +2642,38 @@ async function loadAnalytics() {
 }
 
 // ── SETTINGS ───────────────────────────────────
+// ── RLS DIAGNOSTIC ──────────────────────────────────────
+async function testRlsAccess() {
+  const container = document.getElementById('rls-diag-results');
+  container.innerHTML = '<p style="font-size:12px;color:#6b7280">⏳ Test en cours...</p>';
+  const tables = [
+    { name: 'clients', op: 'SELECT', fn: () => sb.from('clients').select('id', {count:'exact',head:true}) },
+    { name: 'delivery_zones', op: 'SELECT', fn: () => sb.from('delivery_zones').select('id', {count:'exact',head:true}) },
+    { name: 'delivery_zones', op: 'INSERT', fn: () => sb.from('delivery_zones').insert({name:'_test_rls_',price_standard:0,price_express:0,delay:'test',active:false,sort_order:999}).select().single().then(async r => { if (!r.error && r.data) await sb.from('delivery_zones').delete().eq('name','_test_rls_'); return r; }) },
+    { name: 'services', op: 'UPDATE', fn: () => sb.from('services').update({active:true}).eq('id','__nonexistent__') },
+  ];
+  const results = await Promise.all(tables.map(async t => {
+    try {
+      const r = await t.fn();
+      const ok = !r.error;
+      return { ...t, ok, msg: r.error ? r.error.message : 'OK' };
+    } catch(e) { return { ...t, ok: false, msg: e.message }; }
+  }));
+  container.innerHTML = results.map(r => `
+    <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-radius:8px;margin-bottom:6px;background:${r.ok?'#f0fdf4':'#fef2f2'}">
+      <span style="font-size:16px">${r.ok?'✅':'❌'}</span>
+      <span style="font-size:12px;font-weight:700;color:${r.ok?'#166534':'#991b1b'}">${r.name} — ${r.op}</span>
+      <span style="font-size:11px;color:#6b7280;flex:1;text-align:right">${r.ok?'Accès OK':r.msg}</span>
+    </div>`).join('');
+  const allOk = results.every(r => r.ok);
+  container.innerHTML += `<p style="font-size:12px;font-weight:700;color:${allOk?'#166534':'#92400e'};margin-top:8px">${allOk?'✅ Toutes les policies RLS sont correctes':'⚠️ Certaines policies manquent — appliquez le SQL ci-dessous dans Supabase'}</p>`;
+}
+function copyRlsSql() {
+  const sql = document.getElementById('rls-sql-block').textContent;
+  navigator.clipboard.writeText(sql).then(() => toast('SQL copié dans le presse-papiers !')).catch(() => toast('Sélectionnez et copiez manuellement', 'error'));
+}
+// ────────────────────────────────────────────────────────
+
 function saveSettings() {
   const config = {
     appname: document.getElementById('s-appname').value,
