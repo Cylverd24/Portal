@@ -1099,6 +1099,7 @@ CREATE POLICY "admin_update_services"
       <div class="form-group"><label>Temps de livraison</label><input id="r-time" placeholder="30-45 min"/></div>
       <div class="form-group"><label>Commande minimum (F)</label><input id="r-min" type="number" placeholder="3000"/></div>
       <div class="form-group"><label>Badge</label><input id="r-badge" placeholder="Nouveau, Populaire..."/></div>
+      <div class="form-group"><label>Zone de livraison</label><select id="r-zone" style="width:100%;padding:10px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;background:#fff"><option value="">-- Aucune zone --</option></select></div>
     </div>
     <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
       <button class="btn btn-ghost" onclick="closeModal('restaurant-modal')">Annuler</button>
@@ -2036,6 +2037,12 @@ async function loadRestaurants() {
 function openRestaurantModal(prefill) {
   document.getElementById('r-id').value='';
   ['r-name','r-cuisine','r-img','r-time','r-min','r-badge'].forEach(id=>document.getElementById(id).value='');
+  // Peupler le select zones
+  const zSel = document.getElementById('r-zone');
+  sb.from('delivery_zones').select('id,name,price_standard').eq('active',true).order('sort_order').then(({data:zones})=>{
+    zSel.innerHTML = '<option value="">-- Aucune zone --</option>' + (zones||[]).map(z=>`<option value="${z.id}">${z.name} (${z.price_standard} F)</option>`).join('');
+    zSel.value = '';
+  });
   document.getElementById('restaurant-modal-title').textContent='Ajouter un restaurant';
   document.getElementById('restaurant-modal').classList.add('open');
 }
@@ -2049,6 +2056,11 @@ async function editRestaurant(id) {
   document.getElementById('r-time').value=r.delivery_time||'';
   document.getElementById('r-min').value=r.min_order||'';
   document.getElementById('r-badge').value=r.badge||'';
+  // Peupler le select zones
+  const zSelect = document.getElementById('r-zone');
+  const { data: zones } = await sb.from('delivery_zones').select('id,name,price_standard').eq('active',true).order('sort_order');
+  zSelect.innerHTML = '<option value="">-- Aucune zone --</option>' + (zones||[]).map(z=>`<option value="${z.id}">${z.name} (${z.price_standard} F)</option>`).join('');
+  zSelect.value = r.zone_id || '';
   document.getElementById('restaurant-modal-title').textContent='Modifier le restaurant';
   document.getElementById('restaurant-modal').classList.add('open');
 }
@@ -2056,7 +2068,8 @@ async function saveRestaurant() {
   const name = document.getElementById('r-name').value.trim();
   if (!name) return alert('Nom requis');
   const id = document.getElementById('r-id').value;
-  const payload = { name, cuisine:document.getElementById('r-cuisine').value, img:document.getElementById('r-img').value, delivery_time:document.getElementById('r-time').value||'30-45 min', min_order:Number(document.getElementById('r-min').value)||0, badge:document.getElementById('r-badge').value };
+  const zoneVal = document.getElementById('r-zone').value;
+  const payload = { name, cuisine:document.getElementById('r-cuisine').value, img:document.getElementById('r-img').value, delivery_time:document.getElementById('r-time').value||'30-45 min', min_order:Number(document.getElementById('r-min').value)||0, badge:document.getElementById('r-badge').value, zone_id: zoneVal || null };
   if (id) { await sb.from('restaurants').update(payload).eq('id',id); toast('Restaurant mis à jour'); }
   else { await sb.from('restaurants').insert({...payload, active:true, rating:0, reviews:0}); toast('Restaurant ajouté'); }
   closeModal('restaurant-modal'); loadRestaurants();
@@ -3672,8 +3685,8 @@ function drvStopQrScanner() {
 
 function _drvHandleQrResult(data) {
   // Le QR code encode le code à 4 chiffres — extraire les digits
-  const digits = (data || '').replace(/\D/g,'').slice(-4).padStart(4,'0');
-  const expected = (window._activeDeliveryCode || '').toString().padStart(4,'0');
+  const digits = (data || '').replace(/\D/g,'').slice(-4);
+  const expected = (window._activeDeliveryCode || '').toString().slice(-4);
   _drvShowCodeResult(digits, expected);
 }
 
@@ -3684,9 +3697,9 @@ function drvValidateCode() {
   const expected = (window._activeDeliveryCode || '').toString().padStart(4, '0').slice(-4);
 
   if (!window._activeDeliveryCode) {
-    window._codeValidated = true;
-    if (input) { input.style.borderColor='#10b981'; input.style.background='rgba(16,185,129,.15)'; input.placeholder='✓ OK'; input.value=''; }
-    _showCodeResultUI(true, 'Livraison prête à confirmer');
+    window._codeValidated = false;
+    toast('Code de livraison introuvable pour cette commande — contactez le support', 'error');
+    if (input) input.style.borderColor = '#EF4444';
     return;
   }
   if (!raw || raw.replace(/\D/g,'').length < 1) {
@@ -3698,7 +3711,7 @@ function drvValidateCode() {
 }
 
 function _drvShowCodeResult(entered, expected) {
-  const ok = entered === expected || !window._activeDeliveryCode;
+  const ok = entered === expected;
   window._codeValidated = ok;
   if (ok) {
     const input = document.getElementById('drv-code-input');
