@@ -1472,7 +1472,8 @@ async function doLogin() {
 
     // Succès
     rlClear();
-    currentUser = { ...data }; delete currentUser.pw_hash; // ne jamais garder le hash en mémoire
+    window._staffAuthHash = data.pw_hash; // gardé en mémoire uniquement pour signer les appels RPC sécurisés, jamais affiché/loggé
+    currentUser = { ...data }; delete currentUser.pw_hash; // ne jamais garder le hash dans l'objet visible
     _resetSession();
     sessionStorage.setItem('_re_auth', '1'); // marquer session active
 
@@ -1509,6 +1510,7 @@ function logout() {
   if (_realtimeSub) { try{ sb.removeChannel(_realtimeSub); }catch(e){} _realtimeSub = null; }
   if (_sTimer) { clearTimeout(_sTimer); _sTimer = null; }
   currentUser = null;
+  window._staffAuthHash = null;
   // Nettoyer les données sensibles en mémoire
   _ordersAll = []; _clientsAll = [];
   sessionStorage.removeItem('_re_auth');
@@ -1737,7 +1739,8 @@ function searchOrders(q) {
 }
 
 async function updateOrderStatus(id, status) {
-  await sb.from('orders').update({status, updated_at: new Date().toISOString()}).eq('id',id);
+  const {data:res,error} = await sb.rpc('admin_update_order_status',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:id,p_status:status});
+  if (error || !res?.success) { toast(res?.error || 'Erreur lors du changement de statut','error'); return; }
 
   // ── Notification client Supabase ──────────────────────
   const order = _ordersAll.find(o=>o.id===id);
@@ -1908,7 +1911,8 @@ async function openAssignModal(orderId) {
 }
 
 async function assignDriver(orderId, driverId, driverName) {
-  await sb.from('orders').update({status:'delivering', driver_id:driverId, driver_name:driverName}).eq('id',orderId);
+  const {data:res,error}=await sb.rpc('admin_assign_driver',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:orderId,p_driver_id:driverId,p_driver_name:driverName});
+  if (error || !res?.success) { toast(res?.error || 'Erreur lors de l\'assignation','error'); return; }
 
   // ── Notification client : livreur assigné ──────────────────────────────
   const order = _ordersAll.find(o=>o.id===orderId);
@@ -2126,13 +2130,18 @@ async function saveDriver() {
   const id    = document.getElementById('d-id').value;
   if (!name||!phone) return alert('Nom et téléphone requis');
   if (!id && !pw) return alert('Mot de passe requis pour un nouveau livreur');
-  const payload = { name, phone, role:'driver', zone:document.getElementById('d-zone').value, vehicule:document.getElementById('d-vehicle').value, email:document.getElementById('d-email').value };
-  if (pw) payload.pw_hash = await hashPw(pw);
-  if (id) { await sb.from('staff').update(payload).eq('id',id); toast('Livreur mis à jour'); }
-  else { await sb.from('staff').insert({...payload, active:true, online:false, rating:5.0, trips:0}); toast('Livreur ajouté'); }
+  const zone=document.getElementById('d-zone').value, vehicule=document.getElementById('d-vehicle').value, email=document.getElementById('d-email').value;
+  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id||null,p_name:name,p_phone:phone,p_role:'driver',p_zone:zone,p_vehicule:vehicule,p_email:email});
+  if (error || !res?.success) { toast(res?.error || 'Erreur lors de l\'enregistrement','error'); return; }
+  if (pw) {
+    const newHash = await hashPw(pw);
+    const targetId = id || res.id;
+    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:targetId,p_new_pw_hash:newHash});
+  }
+  toast(id?'Livreur mis à jour':'Livreur ajouté');
   closeModal('driver-modal'); loadDrivers();
 }
-async function toggleDriverActive(id, active) { await sb.from('staff').update({active}).eq('id',id); toast(active?'Livreur activé':'Livreur désactivé'); loadDrivers(); }
+async function toggleDriverActive(id, active) { const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_active:active}); if(error||!res?.success){toast(res?.error||'Erreur','error');return;} toast(active?'Livreur activé':'Livreur désactivé'); loadDrivers(); }
 async function deleteDriver(id) { if (!confirm('Supprimer ce livreur ?')) return; await sb.from('staff').delete().eq('id',id); toast('Livreur supprimé'); loadDrivers(); }
 
 // ── AGENTS ─────────────────────────────────────
@@ -2185,15 +2194,20 @@ async function saveAgent() {
   const role  = document.getElementById('ag-role').value || 'agent';
   if (!name||!phone) return alert('Nom et téléphone requis');
   if (!id && !pw) return alert('Mot de passe requis');
-  const payload = { name, phone, role, email:document.getElementById('ag-email').value };
-  if (role==='driver') { payload.zone=document.getElementById('ag-zone').value||''; payload.vehicule=document.getElementById('ag-vehicle').value||''; }
-  if (pw) payload.pw_hash = await hashPw(pw);
-  const defaults = role==='driver' ? {active:true,online:false,rating:5.0,trips:0} : {active:true};
-  if (id) { await sb.from('staff').update(payload).eq('id',id); toast('Profil mis à jour'); }
-  else { await sb.from('staff').insert({...payload,...defaults}); toast(role==='admin'?'👑 Admin créé':role==='driver'?'🏍️ Livreur créé':'🎧 Agent créé'); }
+  const email=document.getElementById('ag-email').value;
+  const zone = role==='driver' ? (document.getElementById('ag-zone').value||'') : null;
+  const vehicule = role==='driver' ? (document.getElementById('ag-vehicle').value||'') : null;
+  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id||null,p_name:name,p_phone:phone,p_role:role,p_zone:zone,p_vehicule:vehicule,p_email:email});
+  if (error || !res?.success) { toast(res?.error || 'Erreur lors de l\'enregistrement','error'); closeModal('agent-modal'); return; }
+  if (pw) {
+    const newHash = await hashPw(pw);
+    const targetId = id || res.id;
+    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:targetId,p_new_pw_hash:newHash});
+  }
+  toast(id?'Profil mis à jour':(role==='admin'?'👑 Admin créé':role==='driver'?'🏍️ Livreur créé':'🎧 Agent créé'));
   closeModal('agent-modal'); loadAgents();
 }
-async function toggleAgent(id, active) { await sb.from('staff').update({active}).eq('id',id); toast(active?'Agent activé':'Agent désactivé'); loadAgents(); }
+async function toggleAgent(id, active) { const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_active:active}); if(error||!res?.success){toast(res?.error||'Erreur','error');return;} toast(active?'Agent activé':'Agent désactivé'); loadAgents(); }
 async function deleteAgent(id) { if (!confirm('Supprimer cet agent ?')) return; await sb.from('staff').delete().eq('id',id); toast('Agent supprimé'); loadAgents(); }
 
 // ── PRODUITS ───────────────────────────────────
@@ -3567,19 +3581,20 @@ function _missionCard(o, canAccept) {
 }
 
 async function drvAcceptOrder(orderId) {
-  const {error}=await sb.from('orders').update({driver_id:currentUser.id,driver_name:currentUser.name,status:'confirmed'}).eq('id',orderId).is('driver_id',null);
-  if (error) return toast('Cette course a déjà été acceptée','error');
+  const {data:res,error}=await sb.rpc('staff_accept_order',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:orderId});
+  if (error || !res?.success) return toast(res?.error || 'Cette course a déjà été acceptée','error');
   toast('🏍️ Course acceptée !'); loadDriverMissions();
 }
 
 async function drvStartDelivery(orderId) {
-  await sb.from('orders').update({status:'delivering'}).eq('id',orderId).eq('driver_id',currentUser.id);
+  const {data:res,error}=await sb.rpc('staff_mark_delivering',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:orderId});
+  if (error || !res?.success) return toast(res?.error || 'Impossible de démarrer la livraison','error');
   toast('🏍️ Livraison démarrée !'); loadDriverMissions();
 }
 
 async function drvMarkDelivered() {
   if (!_activeOrderId) return;
-  // Si un code est attendu, il doit d'abord être validé
+  // Si un code est attendu, il doit d'abord être validé côté UI (vérification serveur juste après, dans le RPC)
   if (window._activeDeliveryCode && !window._codeValidated) {
     toast('🔑 Saisissez et validez le code client avant de confirmer', 'error');
     const ci = document.getElementById('drv-code-input');
@@ -3588,8 +3603,11 @@ async function drvMarkDelivered() {
   }
   if (!window.confirm('Confirmer la livraison ?')) return;
   const ordId=_activeOrderId;
-  await sb.from('orders').update({status:'delivered',delivered_at:new Date().toISOString()}).eq('id',ordId).eq('driver_id',currentUser.id);
-  await sb.from('staff').update({trips:(currentUser.trips||0)+1}).eq('id',currentUser.id);
+  const {data:res,error}=await sb.rpc('staff_mark_delivered',{
+    p_staff_id:currentUser.id, p_pw_hash:window._staffAuthHash,
+    p_order_id:ordId, p_delivery_code:String(window._activeDeliveryCode||'')
+  });
+  if (error || !res?.success) { toast(res?.error || 'Erreur lors de la confirmation de livraison','error'); return; }
   currentUser.trips=(currentUser.trips||0)+1;
   document.getElementById('drv-profile-trips').textContent=currentUser.trips;
   const {data:order}=await sb.from('orders').select('client_id').eq('id',ordId).single();
@@ -3758,13 +3776,13 @@ function drvSelectReason(btn, reason) {
 async function drvConfirmTransfer() {
   if (!_activeOrderId||!_transferReason) return;
   const targetId=document.getElementById('drv-transfer-target').value||null;
-  const targetName=targetId?document.getElementById('drv-transfer-target').selectedOptions[0]?.text:null;
-  const {error}=await sb.from('orders').update({
-    driver_id:targetId,driver_name:targetName?targetName.replace(/^🏍️\s*/,'').split(' —')[0]:null,
-    status:targetId?'confirmed':'pending',transfer_reason:_transferReason,
-    transferred_from:currentUser.name,transferred_at:new Date().toISOString()
-  }).eq('id',_activeOrderId);
-  if (error) return toast('Erreur : '+error.message,'error');
+  const targetNameRaw=targetId?document.getElementById('drv-transfer-target').selectedOptions[0]?.text:null;
+  const targetName=targetNameRaw?targetNameRaw.replace(/^🏍️\s*/,'').split(' —')[0]:null;
+  const {data:res,error}=await sb.rpc('staff_transfer_order',{
+    p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:_activeOrderId,
+    p_target_driver_id:targetId,p_target_driver_name:targetName,p_reason:_transferReason
+  });
+  if (error || !res?.success) return toast(res?.error || 'Erreur : '+(error?.message||'inconnue'),'error');
   await sb.from('notifications').insert({user_id:null,user_type:'admin',
     message:`🔄 ${currentUser.name} a transféré #${String(_activeOrderId).slice(-6)} — Raison : ${_transferReason}${targetName?' → '+targetName.replace(/^🏍️\s*/,'').split(' —')[0]:' (pool)'}`,
     type:'order_transferred',read:false});
@@ -3846,8 +3864,9 @@ async function drvChangePw(){
   if (!np||np.length<6) return toast('Mot de passe trop court','error');
   if (np!==cp) return toast('Les mots de passe ne correspondent pas','error');
   const newHash=await hashPw(np);
-  const {error}=await sb.from('staff').update({pw_hash:newHash}).eq('id',currentUser.id);
-  if (error) return toast('Erreur : '+error.message,'error');
+  const {data:res,error}=await sb.rpc('staff_change_own_password',{p_staff_id:currentUser.id,p_old_pw_hash:window._staffAuthHash,p_new_pw_hash:newHash});
+  if (error || !res?.success) return toast(res?.error || 'Erreur lors du changement','error');
+  window._staffAuthHash = newHash; // garder la session valide avec le nouveau hash
   document.getElementById('drv-new-pw').value=''; document.getElementById('drv-confirm-pw').value='';
   toast('✅ Mot de passe modifié');
 }
@@ -4081,20 +4100,13 @@ async function saveOwner() {
   if (!id && !pw) { errEl.textContent='Mot de passe requis'; errEl.style.display='block'; return; }
   if (!id && pw.length < 6) { errEl.textContent='Mot de passe trop court (min 6 car.)'; errEl.style.display='block'; return; }
 
-  const payload = { name, phone, email, active, role:'owner', restaurant_id: restoId };
-
+  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id||null,p_name:name,p_phone:phone,p_role:'owner',p_restaurant_id:restoId,p_email:email,p_active:active});
+  if (error || !res?.success) { errEl.textContent='Erreur: '+(res?.error||error?.message||'inconnue'); errEl.style.display='block'; return; }
   if (pw) {
-    payload.pw_hash = await hashPw(pw);
+    const newHash = await hashPw(pw);
+    const targetId = id || res.id;
+    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:targetId,p_new_pw_hash:newHash});
   }
-
-  let error;
-  if (id) {
-    ({ error } = await sb.from('staff').update(payload).eq('id', id));
-  } else {
-    ({ error } = await sb.from('staff').insert(payload));
-  }
-
-  if (error) { errEl.textContent='Erreur: '+error.message; errEl.style.display='block'; return; }
 
   closeModal('owner-modal');
   toast(id ? 'Propriétaire mis à jour ✓' : 'Propriétaire créé ✓');
@@ -4102,7 +4114,8 @@ async function saveOwner() {
 }
 
 async function toggleOwnerActive(id, active) {
-  await sb.from('staff').update({ active }).eq('id', id);
+  const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_active:active});
+  if (error || !res?.success) { toast(res?.error || 'Erreur','error'); return; }
   toast(active ? 'Compte activé' : 'Compte désactivé');
   loadOwners();
 }
@@ -4111,7 +4124,8 @@ async function resetOwnerPw(id, name) {
   const np = prompt(`Nouveau mot de passe pour ${name} :`);
   if (!np || np.length < 6) { alert('Mot de passe trop court (min 6 caractères)'); return; }
   const hash = await hashPw(np);
-  await sb.from('staff').update({ pw_hash: hash }).eq('id', id);
+  const {data:res,error}=await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_new_pw_hash:hash});
+  if (error || !res?.success) { toast(res?.error || 'Erreur','error'); return; }
   toast('Mot de passe réinitialisé ✓');
 }
 
