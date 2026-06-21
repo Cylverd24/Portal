@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<title>Renaud Express — Espace Entreprise</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f0f4f8;--white:#ffffff;--card:#ffffff;
+  --blue:#1A4FD8;--blue-light:#EFF6FF;--blue-dark:#1039a8;
+  --orange:#f97316;--orange-light:#fff7ed;
+  --green:#10b981;--green-light:#ecfdf5;
+  --red:#ef4444;--red-light:#fef2f2;
+  --yellow:#f59e0b;--yellow-light:#fffbeb;
+  --text:#0f172a;--text2:#475569;--text3:#94a3b8;
+  --border:#e2e8f0;--border2:#f1f5f9;
+  --shadow:0 2px 12px rgba(0,0,0,.08);
+  --shadow2:0 8px 32px rgba(0,0,0,.12);
+  --radius:16px;--radius-sm:10px;
+  --fd:'DM Sans',system-ui,sans-serif;
+}
+body{font-family:var(--fd);background:var(--bg);color:var(--text);min-height:100vh}
+
+/* ── LOGIN ── */
+#login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;background:linear-gradient(135deg,#0a0f1e,#1A4FD8)}
+.login-card{background:#fff;border-radius:24px;padding:40px 32px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.login-logo{text-align:center;margin-bottom:28px}
+.login-logo .icon{font-size:48px;display:block;margin-bottom:10px}
+.login-logo h1{font-size:22px;font-weight:900;color:var(--text)}
+.login-logo p{font-size:13px;color:var(--text2);margin-top:4px}
+
+/* ── APP SHELL ── */
+#app{display:none;min-height:100vh}
+.topbar{background:#fff;border-bottom:1px solid var(--border);padding:0 20px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
+.topbar-left{display:flex;align-items:center;gap:12px}
+.resto-avatar{width:36px;height:36px;border-radius:10px;background:var(--blue);display:flex;align-items:center;justify-content:center;font-size:18px;color:#fff;font-weight:900;flex-shrink:0}
+.resto-name{font-size:15px;font-weight:800;color:var(--text)}
+.resto-status{display:flex;align-items:center;gap:6px;margin-top:2px}
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--green);box-shadow:0 0 6px var(--green)}
+.status-text{font-size:11px;font-weight:700;color:var(--text2)}
+
+/* ── BOTTOM NAV ── */
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--border);display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom)}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 4px 8px;cursor:pointer;position:relative;transition:all .2s}
+.nav-item .nav-icon{font-size:22px;transition:transform .2s;margin-bottom:3px}
+.nav-item .nav-label{font-size:10px;font-weight:700;color:var(--text3);transition:color .2s}
+.nav-item.active .nav-label{color:var(--blue)}
+.nav-item.active .nav-icon{transform:scale(1.1)}
+.nav-badge{position:absolute;top:6px;right:calc(50% - 18px);background:var(--red);color:#fff;font-size:10px;font-weight:900;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 4px}
+
+/* ── MAIN CONTENT ── */
+.page{display:none;padding:20px 16px 100px;max-width:600px;margin:0 auto}
+.page.active{display:block}
+
+/* ── CARDS ── */
+.card{background:#fff;border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);margin-bottom:14px}
+.card-title{font-size:12px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px}
+
+/* ── STAT CARDS ── */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.stat-card{background:#fff;border-radius:var(--radius-sm);padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:4px}
+.stat-card .stat-icon{font-size:24px;margin-bottom:6px}
+.stat-card .stat-val{font-size:24px;font-weight:900;color:var(--text)}
+.stat-card .stat-label{font-size:11px;color:var(--text2);font-weight:600}
+
+/* ── ORDER CARDS ── */
+.order-card{background:#fff;border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);margin-bottom:12px;border-left:4px solid transparent;transition:all .2s}
+.order-card.pending{border-left-color:var(--yellow);background:var(--yellow-light)}
+.order-card.confirmed{border-left-color:var(--blue);background:var(--blue-light)}
+.order-card.delivering{border-left-color:var(--orange);background:var(--orange-light)}
+.order-card.delivered{border-left-color:var(--green);background:var(--green-light)}
+.order-card.cancelled{border-left-color:var(--text3);opacity:.6}
+.order-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.order-ref{font-size:13px;font-weight:800;color:var(--text)}
+.order-time{font-size:11px;color:var(--text3);margin-top:2px}
+.order-total{font-size:18px;font-weight:900;color:var(--blue)}
+.order-items{font-size:12px;color:var(--text2);margin-bottom:4px;line-height:1.5}
+
+/* ── BADGES ── */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700}
+.badge.pending{background:var(--yellow-light);color:var(--yellow)}
+.badge.confirmed{background:var(--blue-light);color:var(--blue)}
+.badge.delivering{background:var(--orange-light);color:var(--orange)}
+.badge.delivered{background:var(--green-light);color:var(--green)}
+.badge.cancelled{background:#f8fafc;color:var(--text3)}
+
+/* ── BUTTONS ── */
+.btn{padding:10px 18px;border-radius:var(--radius-sm);border:none;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--fd);display:inline-flex;align-items:center;gap:6px;transition:all .2s;white-space:nowrap}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-blue{background:var(--blue);color:#fff}
+.btn-blue:hover:not(:disabled){background:var(--blue-dark)}
+.btn-green{background:var(--green);color:#fff}
+.btn-red{background:var(--red-light);color:var(--red);border:1px solid #fecaca}
+.btn-ghost{background:#f8fafc;color:var(--text2);border:1.5px solid var(--border)}
+.btn-sm{padding:7px 12px;font-size:12px;border-radius:8px}
+.btn-full{width:100%;justify-content:center;padding:14px}
+
+/* ── FORM ── */
+.form-group{margin-bottom:16px}
+.form-label{font-size:12px;font-weight:700;color:var(--text2);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px}
+.form-input{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:14px;font-family:var(--fd);color:var(--text);outline:none;transition:border-color .2s;background:#fff}
+.form-input:focus{border-color:var(--blue)}
+.form-input::placeholder{color:var(--text3)}
+textarea.form-input{resize:vertical;min-height:70px;line-height:1.5}
+
+/* ── SLA BANNER ── */
+.sla-banner{background:linear-gradient(135deg,var(--blue),#3b6fe8);color:#fff;border-radius:var(--radius);padding:18px;margin-bottom:14px;display:flex;align-items:center;gap:14px}
+.sla-banner .sla-icon{font-size:32px}
+.sla-banner .sla-text{flex:1}
+.sla-banner .sla-text b{font-size:18px;display:block}
+.sla-banner .sla-text span{font-size:12px;opacity:.85}
+
+/* ── EMPTY STATE ── */
+.empty-state{text-align:center;padding:48px 20px}
+.empty-state .emoji{font-size:52px;margin-bottom:14px}
+.empty-state h3{font-size:16px;font-weight:800;margin-bottom:6px}
+.empty-state p{font-size:13px;color:var(--text2)}
+
+/* ── TOAST ── */
+#toast-container{position:fixed;top:72px;left:50%;transform:translateX(-50%);z-index:500;display:flex;flex-direction:column;gap:8px;width:calc(100% - 32px);max-width:400px;pointer-events:none}
+.toast{background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 8px 32px rgba(0,0,0,.15);display:flex;align-items:center;gap:12px;animation:slideDown .4s ease;border-left:4px solid var(--blue);pointer-events:all}
+.toast.success{border-left-color:var(--green)}
+.toast.error{border-left-color:var(--red)}
+@keyframes slideDown{from{transform:translateY(-20px);opacity:0}to{transform:translateY(0);opacity:1}}
+.toast-icon{font-size:22px;flex-shrink:0}
+.toast-body{flex:1}
+.toast-title{font-size:13px;font-weight:800;color:var(--text)}
+.toast-msg{font-size:12px;color:var(--text2);margin-top:2px}
+.toast-close{font-size:16px;color:var(--text3);cursor:pointer;background:none;border:none;padding:2px}
+
+/* ── TABS ── */
+.tabs-row{display:flex;gap:6px;margin-bottom:16px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.tabs-row::-webkit-scrollbar{display:none}
+.tab-pill{padding:8px 16px;border-radius:20px;border:1.5px solid var(--border);background:#fff;font-size:12px;font-weight:700;color:var(--text2);cursor:pointer;white-space:nowrap;transition:all .2s}
+.tab-pill.active{background:var(--blue);border-color:var(--blue);color:#fff}
+
+/* ── DELIVERY CODE ── */
+.code-display{background:var(--blue-light);border-radius:var(--radius-sm);padding:16px;text-align:center;margin-top:10px}
+.code-display .code{font-size:28px;font-weight:900;letter-spacing:6px;color:var(--blue)}
+.code-display .label{font-size:11px;color:var(--text2);margin-top:4px}
+
+@media(min-width:600px){
+  .page{padding:24px 20px 100px}
+  .stats-grid{grid-template-columns:repeat(3,1fr)}
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════
+     LOGIN
+══════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">
+      <span class="icon">🏢</span>
+      <h1>Espace Entreprise</h1>
+      <p>Renaud Express — Libreville</p>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Téléphone</label>
+      <input class="form-input" id="l-phone" type="tel" placeholder="+241 07 XX XX XX" autocomplete="tel"/>
+    </div>
+    <div class="form-group" style="margin-bottom:6px">
+      <label class="form-label">Mot de passe</label>
+      <div style="position:relative">
+        <input class="form-input" id="l-pw" type="password" placeholder="••••••••" style="padding-right:46px"/>
+        <button onclick="const i=document.getElementById('l-pw');i.type=i.type==='password'?'text':'password'"
+          style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">👁</button>
+      </div>
+    </div>
+    <p id="l-err" style="color:var(--red);font-size:12px;margin-bottom:12px;display:none;font-weight:600"></p>
+    <button class="btn btn-blue btn-full" id="l-btn" onclick="doLogin()">Se connecter →</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     APP
+══════════════════════════════════════════ -->
+<div id="app">
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="resto-avatar" id="tb-avatar">B</div>
+      <div>
+        <div class="resto-name" id="tb-name">Entreprise</div>
+        <div class="resto-status">
+          <div class="status-dot"></div>
+          <span class="status-text" id="tb-status-text">Compte actif</span>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="doLogout()">⏻</button>
+    </div>
+  </div>
+
+  <!-- ── DASHBOARD ── -->
+  <div class="page active" id="page-dashboard">
+    <div class="sla-banner">
+      <div class="sla-icon">⏱️</div>
+      <div class="sla-text">
+        <b id="sla-value">25 min</b>
+        <span>Délai engagé pour l'affectation d'un livreur</span>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-icon">📦</div><div class="stat-val" id="s-pending">0</div><div class="stat-label">En attente</div></div>
+      <div class="stat-card"><div class="stat-icon">🚀</div><div class="stat-val" id="s-active">0</div><div class="stat-label">En cours</div></div>
+      <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-val" id="s-today">0</div><div class="stat-label">Livrées aujourd'hui</div></div>
+    </div>
+
+    <button class="btn btn-blue btn-full" style="margin-bottom:18px;padding:16px;font-size:15px" onclick="showPage('new')">
+      ➕ Nouvelle demande de livraison
+    </button>
+
+    <p class="card-title">🕐 Demandes récentes</p>
+    <div id="recent-orders"></div>
+  </div>
+
+  <!-- ── NOUVELLE DEMANDE ── -->
+  <div class="page" id="page-new">
+    <div class="card">
+      <p class="card-title">📍 Adresse de retrait (chez vous)</p>
+      <div class="form-group">
+        <label class="form-label">Adresse de retrait *</label>
+        <input class="form-input" id="n-pickup" type="text" placeholder="Ex: Baby Premium, Akanda, derrière..."/>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="card-title">🎯 Destination du client</p>
+      <div class="form-group">
+        <label class="form-label">Adresse de livraison *</label>
+        <input class="form-input" id="n-delivery" type="text" placeholder="Adresse complète du client"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nom du destinataire *</label>
+        <input class="form-input" id="n-recipname" type="text" placeholder="Nom du client"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Téléphone du destinataire *</label>
+        <input class="form-input" id="n-recipphone" type="tel" placeholder="07XXXXXXXX"/>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="card-title">📦 Détails du colis</p>
+      <div class="form-group">
+        <label class="form-label">Description (optionnel)</label>
+        <textarea class="form-input" id="n-desc" placeholder="Contenu, fragilité, instructions particulières..."></textarea>
+      </div>
+    </div>
+
+    <p id="n-err" style="color:var(--red);font-size:12px;margin-bottom:10px;display:none;font-weight:600"></p>
+    <button class="btn btn-blue btn-full" id="n-submit-btn" onclick="submitDelivery()" style="padding:16px;font-size:15px">
+      🚀 Envoyer la demande
+    </button>
+    <button class="btn btn-ghost btn-full" style="margin-top:10px" onclick="showPage('dashboard')">Annuler</button>
+  </div>
+
+  <!-- ── MES DEMANDES ── -->
+  <div class="page" id="page-orders">
+    <div class="tabs-row" id="orders-tabs">
+      <button class="tab-pill active" onclick="filterOrders('all')">📋 Toutes</button>
+      <button class="tab-pill" onclick="filterOrders('pending')">⏳ En attente</button>
+      <button class="tab-pill" onclick="filterOrders('active')">🚀 En cours</button>
+      <button class="tab-pill" onclick="filterOrders('delivered')">🎉 Livrées</button>
+    </div>
+    <div id="orders-list"></div>
+  </div>
+
+  <!-- ── PROFIL ── -->
+  <div class="page" id="page-profile">
+    <div class="card">
+      <p class="card-title">Informations entreprise</p>
+      <div class="form-group">
+        <label class="form-label">Nom de l'entreprise</label>
+        <input class="form-input" id="p-bizname" type="text" disabled/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Téléphone</label>
+        <input class="form-input" id="p-phone" type="tel" disabled/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Tarif négocié</label>
+        <input class="form-input" id="p-rate" type="text" disabled/>
+      </div>
+      <p style="font-size:12px;color:var(--text3)">Pour modifier ces informations, contactez l'administration Renaud Express.</p>
+    </div>
+
+    <div class="card">
+      <p class="card-title">Changer le mot de passe</p>
+      <div class="form-group">
+        <label class="form-label">Mot de passe actuel</label>
+        <input class="form-input" id="p-oldpw" type="password" placeholder="••••••••"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nouveau mot de passe</label>
+        <input class="form-input" id="p-newpw" type="password" placeholder="••••••••"/>
+      </div>
+      <button class="btn btn-ghost btn-full" onclick="changePassword()">🔑 Changer le mot de passe</button>
+    </div>
+
+    <button class="btn btn-red btn-full" onclick="doLogout()" style="margin-top:8px">⏻ Déconnexion</button>
+  </div>
+
+  <!-- BOTTOM NAV -->
+  <div class="bottom-nav">
+    <div class="nav-item active" id="nav-dashboard" onclick="showPage('dashboard')">
+      <div class="nav-icon">📊</div>
+      <div class="nav-label">Accueil</div>
+    </div>
+    <div class="nav-item" id="nav-orders" onclick="showPage('orders')">
+      <div class="nav-icon">📦</div>
+      <div class="nav-label">Demandes</div>
+      <div class="nav-badge" id="orders-badge" style="display:none">0</div>
+    </div>
+    <div class="nav-item" id="nav-profile" onclick="showPage('profile')">
+      <div class="nav-icon">⚙️</div>
+      <div class="nav-label">Profil</div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+// ══════════════════════════════════════════
+//  CONFIG
+// ══════════════════════════════════════════
+const SUPABASE_URL = 'https://opirqbynndqhcpnlgyjf.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9waXJxYnlubmRxaGNwbmxneWpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0MDM4ODYsImV4cCI6MjA5Mzk3OTg4Nn0.zbaacBtr3UHRxsEYxBTXjMIeyoDvrw4l04FlAZJFzHM';
+const SALT = '__RE_SALT_2025__';
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  global: { fetch: (url, opts={}) => fetch(url, { ...opts, cache: 'no-store' }) }
+});
+
+// ══════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════
+let _user = null;       // staff row (role='business')
+let _authHash = null;   // pw_hash, gardé en mémoire uniquement pour signer les appels RPC
+let _orders = [];
+let _currentFilter = 'all';
+
+// ══════════════════════════════════════════
+//  UTILS
+// ══════════════════════════════════════════
+function fmt(n) { return Number(n||0).toLocaleString('fr-FR'); }
+function fmtDate(d) {
+  if (!d) return '—';
+  const dt = new Date(d);
+  return dt.toLocaleDateString('fr-FR',{day:'2-digit',month:'short'}) + ' ' +
+         dt.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+}
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+async function sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+function cleanPhone(p) {
+  const d = p.replace(/\D/g,'');
+  const local = d.replace(/^241/,'').replace(/^0/,'');
+  return ['241'+local,'2410'+local,'0'+local,local,d].filter((v,i,a)=>v.length>=8&&a.indexOf(v)===i);
+}
+
+const STATUS_LABELS = {
+  pending:'⏳ En attente', confirmed:'✅ Affectée', preparing:'👨‍🍳 En préparation',
+  delivering:'🚀 En livraison', delivered:'🎉 Livrée', cancelled:'❌ Annulée'
+};
+function statusBadge(s) {
+  const cls = ['confirmed','preparing'].includes(s) ? 'confirmed' : s;
+  return `<span class="badge ${cls}">${STATUS_LABELS[s]||s}</span>`;
+}
+function getOrderItems(o) {
+  try { return typeof o.items==='string' ? JSON.parse(o.items) : (o.items||[]); }
+  catch { return []; }
+}
+
+// ══════════════════════════════════════════
+//  TOAST
+// ══════════════════════════════════════════
+function toast(title, msg='', type='info', dur=4000) {
+  const icons = { info:'💬', success:'✅', error:'❌' };
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `
+    <span class="toast-icon">${icons[type]||'💬'}</span>
+    <div class="toast-body">
+      <div class="toast-title">${esc(title)}</div>
+      ${msg?`<div class="toast-msg">${esc(msg)}</div>`:''}
+    </div>
+    <button class="toast-close" onclick="this.closest('.toast').remove()">✕</button>`;
+  document.getElementById('toast-container').prepend(el);
+  setTimeout(()=>el.remove(), dur);
+}
+
+// ══════════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════════
+async function doLogin() {
+  const rawPhone = document.getElementById('l-phone').value.trim();
+  const pw       = document.getElementById('l-pw').value;
+  const errEl    = document.getElementById('l-err');
+  const btn      = document.getElementById('l-btn');
+
+  errEl.style.display = 'none';
+  if (!rawPhone || !pw) { errEl.textContent='Remplir tous les champs'; errEl.style.display='block'; return; }
+
+  btn.disabled = true; btn.textContent = 'Connexion...';
+  try {
+    const hash   = await sha256(pw + SALT);
+    const phones = cleanPhone(rawPhone);
+
+    const { data, error } = await sb.from('staff')
+      .select('*')
+      .in('phone', phones)
+      .eq('pw_hash', hash)
+      .eq('active', true)
+      .eq('role', 'business')
+      .single();
+
+    if (error || !data) { errEl.textContent='Identifiants incorrects ou accès non autorisé'; errEl.style.display='block'; return; }
+
+    _user = data;
+    _authHash = hash; // gardé en mémoire uniquement, jamais affiché/loggé, pour signer les RPC
+
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    initApp();
+
+  } catch(e) {
+    errEl.textContent = 'Erreur réseau: '+e.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Se connecter →';
+  }
+}
+
+function doLogout() {
+  _user=null; _authHash=null; _orders=[];
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('l-pw').value = '';
+}
+
+document.getElementById('l-pw').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+
+// ══════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════
+async function initApp() {
+  document.getElementById('tb-avatar').textContent = (_user.business_name||'B')[0];
+  document.getElementById('tb-name').textContent   = _user.business_name || _user.name;
+  document.getElementById('sla-value').textContent = (_user.business_sla_minutes||25) + ' min';
+
+  document.getElementById('p-bizname').value = _user.business_name || '';
+  document.getElementById('p-phone').value   = _user.phone || '';
+  document.getElementById('p-rate').value    = _user.business_rate ? fmt(_user.business_rate)+' F / livraison' : 'Tarif zone standard';
+
+  await loadOrders();
+  renderDashboard();
+
+  // Rafraîchir automatiquement toutes les 20s pour suivre l'avancement des livraisons
+  setInterval(loadOrders, 20000);
+}
+
+// ══════════════════════════════════════════
+//  NAVIGATION
+// ══════════════════════════════════════════
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+id)?.classList.add('active');
+  const navMap = { dashboard:'nav-dashboard', orders:'nav-orders', profile:'nav-profile' };
+  if (navMap[id]) document.getElementById(navMap[id]).classList.add('active');
+  if (id==='orders') renderOrders();
+}
+
+// ══════════════════════════════════════════
+//  ORDERS
+// ══════════════════════════════════════════
+async function loadOrders() {
+  const { data, error } = await sb.rpc('business_get_orders', { p_staff_id: _user.id, p_pw_hash: _authHash });
+  if (error) { console.warn('loadOrders error:', error); return; }
+  _orders = data || [];
+  renderDashboard();
+  updateBadge();
+  if (document.getElementById('page-orders').classList.contains('active')) renderOrders();
+}
+
+function updateBadge() {
+  const n = _orders.filter(o=>['pending','confirmed','preparing'].includes(o.status)).length;
+  const badge = document.getElementById('orders-badge');
+  badge.textContent = n;
+  badge.style.display = n>0?'flex':'none';
+}
+
+function renderDashboard() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const pending  = _orders.filter(o=>o.status==='pending').length;
+  const active   = _orders.filter(o=>['confirmed','preparing','delivering'].includes(o.status)).length;
+  const todayDelivered = _orders.filter(o=>o.status==='delivered' && new Date(o.delivered_at||o.created_at)>=today).length;
+
+  document.getElementById('s-pending').textContent = pending;
+  document.getElementById('s-active').textContent  = active;
+  document.getElementById('s-today').textContent   = todayDelivered;
+
+  const recent = _orders.slice(0,5);
+  document.getElementById('recent-orders').innerHTML = recent.length
+    ? recent.map(orderCardHTML).join('')
+    : '<div class="empty-state"><div class="emoji">📭</div><h3>Aucune demande</h3><p>Vos demandes de livraison apparaîtront ici</p></div>';
+}
+
+function filterOrders(filter) {
+  _currentFilter = filter;
+  document.querySelectorAll('#orders-tabs .tab-pill').forEach((t,i)=>{
+    t.classList.toggle('active', ['all','pending','active','delivered'][i]===filter);
+  });
+  renderOrders();
+}
+
+function renderOrders() {
+  const groups = { active: ['confirmed','preparing','delivering'] };
+  const filtered = _currentFilter==='all' ? _orders
+    : _currentFilter==='active' ? _orders.filter(o=>groups.active.includes(o.status))
+    : _orders.filter(o=>o.status===_currentFilter);
+
+  document.getElementById('orders-list').innerHTML = filtered.length
+    ? filtered.map(orderCardHTML).join('')
+    : '<div class="empty-state"><div class="emoji">📭</div><h3>Aucune demande</h3><p>Pas de demandes dans cette catégorie</p></div>';
+}
+
+function orderCardHTML(o) {
+  const items = getOrderItems(o);
+  const meta = items[0]?.meta || {};
+  return `
+    <div class="order-card ${o.status}">
+      <div class="order-header">
+        <div>
+          <div class="order-ref">Demande #${String(o.id).slice(-6)}</div>
+          <div class="order-time">${fmtDate(o.created_at)}</div>
+        </div>
+        ${statusBadge(o.status)}
+      </div>
+      <div class="order-items">🎯 ${esc(meta.to||o.client_name||'—')} · ${esc(o.phone_number||'—')}</div>
+      <div class="order-items" style="color:var(--text3)">📍 ${esc(o.delivery_address||'—')}</div>
+      ${o.driver_name ? `<div class="order-items">🏍️ Livreur : ${esc(o.driver_name)}</div>` : ''}
+      ${['confirmed','preparing','delivering'].includes(o.status) && o.delivery_code ? `
+        <div class="code-display">
+          <div class="code">${esc(o.delivery_code)}</div>
+          <div class="label">Code à communiquer au livreur pour confirmer la livraison</div>
+        </div>` : ''}
+    </div>`;
+}
+
+// ══════════════════════════════════════════
+//  NOUVELLE DEMANDE
+// ══════════════════════════════════════════
+async function submitDelivery() {
+  const pickup = document.getElementById('n-pickup').value.trim();
+  const delivery = document.getElementById('n-delivery').value.trim();
+  const recipName = document.getElementById('n-recipname').value.trim();
+  const recipPhone = document.getElementById('n-recipphone').value.trim();
+  const desc = document.getElementById('n-desc').value.trim();
+  const errEl = document.getElementById('n-err');
+  const btn = document.getElementById('n-submit-btn');
+
+  errEl.style.display = 'none';
+  if (!pickup || !delivery || !recipName || !recipPhone) {
+    errEl.textContent = 'Tous les champs marqués * sont requis';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Envoi en cours...';
+  try {
+    const { data, error } = await sb.rpc('business_create_delivery', {
+      p_staff_id: _user.id, p_pw_hash: _authHash,
+      p_pickup_address: pickup, p_delivery_address: delivery,
+      p_recipient_name: recipName, p_recipient_phone: recipPhone.replace(/\s/g,''),
+      p_description: desc
+    });
+    if (error || !data?.success) {
+      errEl.textContent = data?.error || error?.message || 'Erreur lors de l\'envoi';
+      errEl.style.display = 'block';
+      return;
+    }
+    toast('🚀 Demande envoyée !', 'Code de livraison : ' + data.code, 'success');
+    ['n-pickup','n-delivery','n-recipname','n-recipphone','n-desc'].forEach(id=>document.getElementById(id).value='');
+    await loadOrders();
+    showPage('orders');
+  } finally {
+    btn.disabled = false; btn.textContent = '🚀 Envoyer la demande';
+  }
+}
+
+// ══════════════════════════════════════════
+//  PROFIL
+// ══════════════════════════════════════════
+async function changePassword() {
+  const oldPw = document.getElementById('p-oldpw').value;
+  const newPw = document.getElementById('p-newpw').value;
+  if (!oldPw || !newPw || newPw.length < 6) { toast('Mot de passe invalide', 'Minimum 6 caractères', 'error'); return; }
+
+  const oldHash = await sha256(oldPw + SALT);
+  const newHash = await sha256(newPw + SALT);
+
+  const { data, error } = await sb.rpc('staff_change_own_password', {
+    p_staff_id: _user.id, p_old_pw_hash: oldHash, p_new_pw_hash: newHash
+  });
+  if (error || !data?.success) { toast('Erreur', data?.error || 'Mot de passe actuel incorrect', 'error'); return; }
+
+  _authHash = newHash;
+  document.getElementById('p-oldpw').value = '';
+  document.getElementById('p-newpw').value = '';
+  toast('✅ Mot de passe modifié');
+}
+</script>
+</body>
+</html>

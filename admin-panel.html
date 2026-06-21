@@ -466,6 +466,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px)}
     <div class="nav-item" onclick="showSection('drivers',this)"><span class="icon">🏍️</span><span>Livreurs</span></div>
     <div class="nav-item" onclick="showSection('agents',this)"><span class="icon">🎧</span><span>Équipe</span></div>
     <div class="nav-item admin-only" onclick="showSection('owners',this)"><span class="icon">🏪</span><span>Restaurateurs</span></div>
+    <div class="nav-item admin-only" onclick="showSection('business',this)"><span class="icon">🏢</span><span>Comptes Entreprise</span></div>
 
     <div class="nav-section">Catalogue</div>
     <div class="nav-item" onclick="showSection('products',this)"><span class="icon">🛒</span><span>Produits frais</span></div>
@@ -1034,6 +1035,49 @@ CREATE POLICY "admin_update_services"
     </div>
   </div>
 
+  <div class="section" id="section-business">
+    <div class="topbar">
+      <div class="topbar-left">
+        <h2>🏢 Comptes Entreprise</h2>
+        <p>Boutiques et entreprises partenaires utilisant Renaud Express pour leurs livraisons</p>
+      </div>
+      <button class="btn btn-blue" onclick="openBusinessModal()">+ Nouveau compte entreprise</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+      <div class="settings-section" style="margin:0;text-align:center">
+        <div style="font-size:28px;font-weight:900;color:var(--brand-blue)" id="biz-total">—</div>
+        <div style="font-size:11px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:4px">Comptes entreprise</div>
+      </div>
+      <div class="settings-section" style="margin:0;text-align:center">
+        <div style="font-size:28px;font-weight:900;color:var(--green)" id="biz-active">—</div>
+        <div style="font-size:11px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:4px">Actifs</div>
+      </div>
+      <div class="settings-section" style="margin:0;text-align:center">
+        <div style="font-size:28px;font-weight:900;color:var(--brand-orange)" id="biz-today">—</div>
+        <div style="font-size:11px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:4px">Commandes aujourd'hui</div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Entreprise</th>
+            <th>Contact</th>
+            <th>SLA engagé</th>
+            <th>Tarif négocié</th>
+            <th>Statut</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="business-tbody">
+          <tr><td colspan="6"><div class="loader"><div class="spinner"></div>Chargement...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
 </div><!-- /main-app -->
 
 <!-- ── MODAL COMMANDE ── -->
@@ -1531,7 +1575,7 @@ function showSection(id, el) {
     drivers: loadDrivers, agents: loadAgents, products: ()=>loadStoreProducts('all'),
     stores: loadStores, pharmacies: loadPharmacies, payments: loadPayments,
     promos: loadPromos, services: loadServices, analytics: loadAnalytics, settings: ()=>{},
-    owners: loadOwners
+    owners: loadOwners, business: loadBusiness
   };
   loaders[id]?.();
 }
@@ -3502,6 +3546,7 @@ async function loadDriverMissions() {
 }
 
 function _showActiveOrder(o) {
+  const isSameOrder = _activeOrderId === o.id;
   _activeOrderId = o.id;
   document.getElementById('drv-active-order').style.display='block';
   document.getElementById('drv-active-avatar').textContent = (o.client_name||'?')[0].toUpperCase();
@@ -3518,9 +3563,13 @@ function _showActiveOrder(o) {
   document.getElementById('drv-maps-link').href = `https://www.google.com/maps/dir/?api=1&destination=${addr}&travelmode=driving`;
   document.getElementById('drv-direction-text').textContent = o.delivery_address||'—';
   document.getElementById('drv-direction-eta').textContent  = 'Appuyez sur Maps pour la navigation';
-  // Reset code input
-  const ci = document.getElementById('drv-code-input');
-  if (ci) { ci.value = ''; ci.style.borderColor = 'rgba(255,255,255,.15)'; }
+  // Reset code input -- seulement si c'est une NOUVELLE commande, jamais pendant que
+  // le livreur saisit/valide le code d'une commande déjà affichée (sinon le polling
+  // automatique de 30s efface le code en cours de saisie -- bug "signal rouge aléatoire")
+  if (!isSameOrder) {
+    const ci = document.getElementById('drv-code-input');
+    if (ci) { ci.value = ''; ci.style.borderColor = 'rgba(255,255,255,.15)'; }
+  }
   // Mobile on delivery info
   const tot = document.getElementById('drv-active-total');
   if (o.payment_method === 'cash') {
@@ -3530,13 +3579,20 @@ function _showActiveOrder(o) {
   } else {
     tot.textContent = `✅ Paiement mobile effectué — ${fmt(o.total)} F CFA`;
   }
-  // Store delivery code for validation — reset systématiquement à chaque nouvelle commande
-  window._activeDeliveryCode = o.delivery_code || null;
-  window._codeValidated      = false;
-  drvStopQrScanner();
-  drvSwitchValidMode('code', null);
-  const resultEl = document.getElementById('drv-code-result');
-  if (resultEl) resultEl.style.display = 'none';
+  // Store delivery code for validation — reset seulement si nouvelle commande,
+  // jamais pendant la saisie/validation en cours (voir explication ci-dessus)
+  if (!isSameOrder) {
+    window._activeDeliveryCode = o.delivery_code || null;
+    window._codeValidated      = false;
+    drvStopQrScanner();
+    drvSwitchValidMode('code', null);
+    const resultEl = document.getElementById('drv-code-result');
+    if (resultEl) resultEl.style.display = 'none';
+  } else {
+    // Même commande : on garde toujours le code à jour (au cas où il aurait changé côté serveur)
+    // mais SANS toucher à la saisie en cours ni au résultat déjà affiché
+    window._activeDeliveryCode = o.delivery_code || window._activeDeliveryCode;
+  }
 }
 
 function _renderMissions(assigned, available) {
@@ -3640,8 +3696,14 @@ function drvSwitchValidMode(mode, btn) {
 async function drvStartQrScanner() {
   const video  = document.getElementById('drv-qr-video');
   const status = document.getElementById('drv-qr-status');
+  // Le navigateur bloque systématiquement la caméra hors contexte sécurisé (HTTPS),
+  // même si l'utilisateur clique "Autoriser" -- ce n'est pas un choix de permission.
+  if (!window.isSecureContext) {
+    status.textContent = '❌ Caméra indisponible : ouvrez le site en https:// (lien direct, pas un fichier local) — utilisez la saisie manuelle en attendant';
+    return;
+  }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    status.textContent = '❌ Caméra non supportée sur cet appareil';
+    status.textContent = '❌ Caméra non supportée sur cet appareil — utilisez la saisie manuelle';
     return;
   }
   try {
@@ -3661,7 +3723,13 @@ async function drvStartQrScanner() {
     }
     _drvScanQrFrame();
   } catch(e) {
-    status.textContent = '❌ Accès caméra refusé — utilisez la saisie manuelle';
+    if (e.name === 'NotAllowedError') {
+      status.textContent = '❌ Permission caméra refusée — vérifiez les réglages du navigateur, ou utilisez la saisie manuelle';
+    } else if (e.name === 'NotFoundError') {
+      status.textContent = '❌ Aucune caméra détectée sur cet appareil — utilisez la saisie manuelle';
+    } else {
+      status.textContent = '❌ Erreur caméra (' + e.name + ') — utilisez la saisie manuelle';
+    }
     console.warn('Camera error:', e);
   }
 }
@@ -4132,6 +4200,116 @@ async function resetOwnerPw(id, name) {
 function openOwnerPanel(restaurantId) {
   // Open the restaurant panel in a new tab, pre-loaded for this restaurant
   window.open('./restaurant-panel.html?resto='+restaurantId, '_blank');
+}
+
+// ══════════════════════════════════════════════════════════════
+// SECTION COMPTES ENTREPRISE
+// Un compte entreprise est un client (table `clients`, role='business')
+// qui passe des demandes de livraison récurrentes (ex: boutique tierce),
+// sans gérer de catalogue produit dans Renaud Express -- juste la course.
+// ══════════════════════════════════════════════════════════════
+let _businessAccounts = [];
+
+async function loadBusiness() {
+  const { data } = await sb.from('staff')
+    .select('id,name,phone,business_name,business_sla_minutes,business_rate,business_notes,active,joined_at')
+    .eq('role','business')
+    .order('business_name');
+  _businessAccounts = data || [];
+
+  document.getElementById('biz-total').textContent  = _businessAccounts.length;
+  document.getElementById('biz-active').textContent = _businessAccounts.filter(b=>b.active).length;
+
+  // Commandes du jour pour ces comptes (liées par client_name, pas client_id --
+  // les commandes business n'ont pas de client_id car NULL côté table clients)
+  const today = new Date().toISOString().slice(0,10);
+  const names = _businessAccounts.map(b=>b.business_name).filter(Boolean);
+  let todayCount = 0;
+  if (names.length) {
+    const { data: todayOrders } = await sb.from('orders').select('id').in('client_name', names).gte('created_at', today+'T00:00:00');
+    todayCount = (todayOrders||[]).length;
+  }
+  document.getElementById('biz-today').textContent = todayCount;
+
+  document.getElementById('business-tbody').innerHTML = _businessAccounts.length
+    ? _businessAccounts.map(b=>`
+        <tr>
+          <td><div class="cell-main">${esc(b.business_name||b.name)}</div><div class="cell-sub">${esc(b.name)}</div></td>
+          <td>${esc(b.phone)}</td>
+          <td><span style="background:var(--blue-muted);color:var(--brand-blue);padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700">⏱️ ${b.business_sla_minutes||25} min</span></td>
+          <td>${b.business_rate ? esc(String(b.business_rate))+' F' : `<span style="color:var(--text-3);font-size:12px">Tarif zone standard</span>`}</td>
+          <td><span class="badge ${b.active?'active':'inactive'}">${b.active?'✅ Actif':'❌ Inactif'}</span></td>
+          <td style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" onclick="editBusiness('${b.id}')">✏️</button>
+            <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="toggleBusinessActive('${b.id}',${!b.active})">${b.active?'🚫':'✅'}</button>
+          </td>
+        </tr>`).join('')
+    : `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-3)">
+        <div style="font-size:40px;margin-bottom:10px">🏢</div>
+        <div>Aucun compte entreprise enregistré</div>
+        <div style="font-size:12px;margin-top:4px">Cliquez sur "+ Nouveau compte entreprise" pour commencer</div>
+      </td></tr>`;
+}
+
+function openBusinessModal() {
+  document.getElementById('business-modal-title').textContent = 'Nouveau compte entreprise';
+  document.getElementById('biz-id').value = '';
+  ['biz-business-name','biz-contact-name','biz-phone','biz-sla','biz-rate','biz-notes'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.value = id==='biz-sla' ? '25' : '';
+  });
+  document.getElementById('business-modal').classList.add('open');
+}
+
+function editBusiness(id) {
+  const b = _businessAccounts.find(x=>x.id===id);
+  if (!b) return;
+  document.getElementById('business-modal-title').textContent = 'Modifier le compte entreprise';
+  document.getElementById('biz-id').value = b.id;
+  document.getElementById('biz-business-name').value = b.business_name||'';
+  document.getElementById('biz-contact-name').value = b.name||'';
+  document.getElementById('biz-phone').value = b.phone||'';
+  document.getElementById('biz-sla').value = b.business_sla_minutes||25;
+  document.getElementById('biz-rate').value = b.business_rate||'';
+  document.getElementById('biz-notes').value = b.business_notes||'';
+  document.getElementById('business-modal').classList.add('open');
+}
+
+async function saveBusiness() {
+  const id = document.getElementById('biz-id').value;
+  const businessName = document.getElementById('biz-business-name').value.trim();
+  const contactName = document.getElementById('biz-contact-name').value.trim();
+  const phone = document.getElementById('biz-phone').value.trim().replace(/\s/g,'').replace(/^\+241/,'').replace(/^241/,'');
+  if (!businessName || !contactName || !phone) return alert('Nom entreprise, contact et téléphone requis');
+
+  const sla = Number(document.getElementById('biz-sla').value) || 25;
+  const rate = document.getElementById('biz-rate').value ? Number(document.getElementById('biz-rate').value) : null;
+  const notes = document.getElementById('biz-notes').value.trim();
+
+  let pwHashNew = null;
+  if (!id) {
+    // Création : mot de passe initial = numéro de téléphone, à faire changer par l'entreprise
+    pwHashNew = await hashPw(phone);
+  }
+
+  const { data: res, error } = await sb.rpc('admin_upsert_business', {
+    p_staff_id: currentUser.id, p_pw_hash: window._staffAuthHash, p_target_id: id || null,
+    p_business_name: businessName, p_contact_name: contactName, p_phone: phone,
+    p_sla_minutes: sla, p_rate: rate, p_notes: notes, p_pw_hash_new: pwHashNew
+  });
+  if (error || !res?.success) return alert('Erreur: ' + (res?.error || error?.message || 'inconnue'));
+  toast(id ? 'Compte entreprise mis à jour' : '🏢 Compte entreprise créé — mot de passe initial = numéro de téléphone');
+  closeModal('business-modal');
+  loadBusiness();
+}
+
+async function toggleBusinessActive(id, active) {
+  const { data: res, error } = await sb.rpc('admin_toggle_business_active', {
+    p_staff_id: currentUser.id, p_pw_hash: window._staffAuthHash, p_target_id: id, p_active: active
+  });
+  if (error || !res?.success) return toast(res?.error || 'Erreur', 'error');
+  toast(active ? 'Compte activé' : 'Compte désactivé');
+  loadBusiness();
 }
 
 // ── IMAGE MODAL ──────────────────────────────────────────────
@@ -4860,6 +5038,37 @@ async function saveImgModal() {
     <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
       <button class="btn btn-ghost" onclick="closeModal('owner-modal')">Annuler</button>
       <button class="btn btn-blue" onclick="saveOwner()">💾 Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="business-modal">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-hdr">
+      <h3 id="business-modal-title">Nouveau compte entreprise</h3>
+      <button class="close-btn" onclick="closeModal('business-modal')">✕</button>
+    </div>
+    <input type="hidden" id="biz-id"/>
+    <div class="form-grid">
+      <div class="form-group"><label>Nom de l'entreprise *</label><input id="biz-business-name" placeholder="Baby Premium"/></div>
+      <div class="form-group"><label>Nom du contact *</label><input id="biz-contact-name" placeholder="La Direction"/></div>
+      <div class="form-group"><label>Téléphone *</label><input id="biz-phone" type="tel" placeholder="241077XXXXXX"/></div>
+      <div class="form-group">
+        <label>SLA engagé (minutes)</label>
+        <input id="biz-sla" type="number" min="5" placeholder="25"/>
+      </div>
+      <div class="form-group">
+        <label>Tarif négocié (F CFA)</label>
+        <input id="biz-rate" type="number" min="0" placeholder="Laisser vide = tarif zone standard"/>
+      </div>
+      <div class="form-group">
+        <label>Notes internes</label>
+        <textarea id="biz-notes" rows="2" placeholder="Conditions, créneaux, remarques..."></textarea>
+      </div>
+    </div>
+    <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="closeModal('business-modal')">Annuler</button>
+      <button class="btn btn-blue" onclick="saveBusiness()">💾 Enregistrer</button>
     </div>
   </div>
 </div>
