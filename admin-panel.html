@@ -2417,21 +2417,44 @@ async function loadDeliveryZones() {
 }
 
 async function saveDeliveryZones() {
-  // Upsert toutes les zones
-  const { error } = await sb.from('delivery_zones').upsert(_zones.map(z => ({
-    id:             z.id,
-    name:           z.name,
-    price_standard: z.price_standard,
-    price_express:  z.price_express,
-    delay:          z.delay,
-    active:         z.active,
-    sort_order:     z.sort_order || 0
-  })));
-  if (error) {
-    console.error('[delivery_zones] Erreur upsert:', error.message);
-    toast('❌ Erreur sauvegarde zones : ' + error.message + ' — Vérifiez les policies RLS sur delivery_zones', 'error');
+  if (!_zones.length) {
+    toast('Aucune zone à sauvegarder', 'info');
     return;
   }
+
+  const zoneNames = _zones.map(z => (z.name||'').trim()).filter(n => n);
+  const duplicatedNames = zoneNames.filter((name, index, all) => all.indexOf(name) !== index);
+  if (duplicatedNames.length) {
+    toast('❌ Noms de zone dupliqués : ' + [...new Set(duplicatedNames)].join(', '), 'error');
+    return;
+  }
+
+  const results = await Promise.all(_zones.map(async z => {
+    const payload = {
+      name:           z.name,
+      price_standard: z.price_standard,
+      price_express:  z.price_express,
+      delay:          z.delay,
+      active:         z.active,
+      sort_order:     z.sort_order || 0
+    };
+
+    if (z.id) {
+      const { error } = await sb.from('delivery_zones').update(payload).eq('id', z.id);
+      return { id: z.id, error };
+    }
+
+    const { error } = await sb.from('delivery_zones').insert(payload);
+    return { id: z.id || null, error };
+  }));
+
+  const failed = results.filter(r => r.error);
+  if (failed.length) {
+    console.error('[delivery_zones] Erreurs save:', failed.map(r => ({id:r.id, message:r.error.message, details:r.error.details || null})));
+    toast('❌ Erreur sauvegarde zones : ' + failed.map(r => r.error.message).join(' ; '), 'error');
+    return;
+  }
+
   toast('✅ Configuration services & tarifs enregistrée');
 }
 
@@ -2479,11 +2502,17 @@ async function toggleService(id, active) {
   await sb.from('services').update({active}).eq('id',id);
 }
 function updateServiceFee(id, val) { _services = _services.map(s=>s.id===id?{...s,fee_base:Number(val)}:s); }
-function updateZone(id, key, val) {
+async function updateZone(id, key, val) {
   _zones = _zones.map(z=>z.id===id?{...z,[key]:key==='active'?val:(key.startsWith('price')?Number(val):val)}:z);
   // Sauvegarde immédiate en base
   const zone = _zones.find(z=>z.id===id);
-  if (zone) sb.from('delivery_zones').update({[key]:key==='active'?val:(key.startsWith('price')?Number(val):val)}).eq('id',id).then(({error})=>{if(error)console.warn('Zone update error:',error.message);});
+  if (zone) {
+    const { error } = await sb.from('delivery_zones').update({[key]:key==='active'?val:(key.startsWith('price')?Number(val):val)}).eq('id',id);
+    if (error) {
+      console.warn('Zone update error:', error.message, error.details || '');
+      toast('Erreur mise à jour zone : ' + error.message, 'error');
+    }
+  }
 }
 async function addDeliveryZone() {
   const newZ = {name:'Nouvelle zone',price_standard:1500,price_express:2000,delay:'30-45 min',active:true,sort_order:_zones.length+1};
@@ -2497,8 +2526,18 @@ async function deleteZone(id) {
 }
 async function saveServicesConfig() {
   // Sauvegarder les frais dans Supabase
-  const updates = _services.map(s => sb.from('services').update({fee:s.fee_base, active:s.active}).eq('id',s.id));
-  await Promise.all(updates);
+  const results = await Promise.all(_services.map(async s => {
+    const { error } = await sb.from('services').update({fee:s.fee_base, active:s.active}).eq('id',s.id);
+    return { id: s.id, error };
+  }));
+
+  const failed = results.filter(r => r.error);
+  if (failed.length) {
+    console.error('[services] Erreurs update:', failed.map(r => ({id:r.id, message:r.error.message, details:r.error.details || null})));
+    toast('❌ Erreur sauvegarde services : ' + failed.map(r => r.error.message).join(' ; '), 'error');
+    return;
+  }
+
   // Zones restent en localStorage
   await saveDeliveryZones();
 }

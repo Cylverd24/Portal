@@ -249,6 +249,15 @@ textarea.form-input{resize:vertical;min-height:70px;line-height:1.5}
     </div>
 
     <div class="card">
+      <p class="card-title">🎁 Code promo</p>
+      <div class="form-group">
+        <label class="form-label">Code promo</label>
+        <input class="form-input" id="n-promo-code" type="text" placeholder="Ex: PROMO20" oninput="renderPromoInfo()" />
+      </div>
+      <p id="n-promo-info" style="font-size:13px;color:#0f172a;min-height:20px">Entrez un code promo actif pour voir la remise.</p>
+    </div>
+
+    <div class="card">
       <p class="card-title">📦 Détails du colis</p>
       <div class="form-group">
         <label class="form-label">Description (optionnel)</label>
@@ -348,6 +357,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 let _user = null;       // staff row (role='business')
 let _authHash = null;   // pw_hash, gardé en mémoire uniquement pour signer les appels RPC
 let _orders = [];
+let _promos = [];
 let _currentFilter = 'all';
 
 // ══════════════════════════════════════════
@@ -468,6 +478,7 @@ async function initApp() {
   document.getElementById('p-rate').value    = _user.business_rate ? fmt(_user.business_rate)+' F / livraison' : 'Tarif zone standard';
 
   await loadOrders();
+  await loadPromos();
   renderDashboard();
 
   // Rafraîchir automatiquement toutes les 20s pour suivre l'avancement des livraisons
@@ -496,6 +507,43 @@ async function loadOrders() {
   renderDashboard();
   updateBadge();
   if (document.getElementById('page-orders').classList.contains('active')) renderOrders();
+}
+
+async function loadPromos() {
+  const { data, error } = await sb.from('promos').select('*').eq('active', true).order('created_at', { ascending: false });
+  if (error) {
+    console.warn('loadPromos error:', error);
+    _promos = [];
+    return;
+  }
+  _promos = data || [];
+  renderPromoInfo();
+}
+
+function renderPromoInfo() {
+  const infoEl = document.getElementById('n-promo-info');
+  if (!infoEl) return;
+  const code = document.getElementById('n-promo-code')?.value.trim().toUpperCase();
+  if (!code) {
+    infoEl.style.color = '#0f172a';
+    infoEl.textContent = _promos.length
+      ? 'Entrez un code promo actif pour voir la remise.'
+      : 'Aucun code promo actif pour le moment.';
+    return;
+  }
+  const promo = _promos.find(p => String(p.code||'').toUpperCase() === code);
+  if (!promo) {
+    infoEl.style.color = '#ef4444';
+    infoEl.textContent = 'Code promo invalide ou inactif.';
+    return;
+  }
+  const parts = [];
+  const pct = promo.discount_pct || promo.discount || 0;
+  if (pct) parts.push(`${pct}% de réduction`);
+  if (promo.free_delivery || promo.freeDelivery) parts.push('Livraison gratuite');
+  if (!parts.length) parts.push('Code promo valide');
+  infoEl.style.color = '#059669';
+  infoEl.textContent = `Promo valide : ${parts.join(' + ')}${promo.expires_at ? ' · valable jusqu’au '+new Date(promo.expires_at).toLocaleDateString('fr-FR') : ''}`;
 }
 
 function updateBadge() {
@@ -554,6 +602,7 @@ function orderCardHTML(o) {
       </div>
       <div class="order-items">🎯 ${esc(meta.to||o.client_name||'—')} · ${esc(o.phone_number||'—')}</div>
       <div class="order-items" style="color:var(--text3)">📍 ${esc(o.delivery_address||'—')}</div>
+      ${o.promo_code ? `<div class="order-items" style="color:#059669">🎁 Code promo : ${esc(o.promo_code)}${Number(o.discount)>0 ? ` · -${fmt(o.discount)} F` : ''}</div>` : ''}
       ${o.driver_name ? `<div class="order-items">🏍️ Livreur : ${esc(o.driver_name)}</div>` : ''}
       ${['confirmed','preparing','delivering'].includes(o.status) && o.delivery_code ? `
         <div class="code-display">
@@ -582,14 +631,36 @@ async function submitDelivery() {
     return;
   }
 
+  const promoCode = document.getElementById('n-promo-code').value.trim().toUpperCase();
+  let promo = null;
+  if (promoCode) {
+    promo = _promos.find(p => String(p.code||'').toUpperCase() === promoCode);
+    if (!promo) {
+      errEl.textContent = 'Code promo invalide ou inactif';
+      errEl.style.display = 'block';
+      return;
+    }
+    if (promo.expires_at && new Date(promo.expires_at) < new Date()) {
+      errEl.textContent = 'Ce code promo est expiré';
+      errEl.style.display = 'block';
+      return;
+    }
+  }
+
   btn.disabled = true; btn.textContent = 'Envoi en cours...';
   try {
-    const { data, error } = await sb.rpc('business_create_delivery', {
+    const payload = {
       p_staff_id: _user.id, p_pw_hash: _authHash,
       p_pickup_address: pickup, p_delivery_address: delivery,
       p_recipient_name: recipName, p_recipient_phone: recipPhone.replace(/\s/g,''),
       p_description: desc
-    });
+    };
+    if (promo) {
+      payload.p_promo_code = promoCode;
+      payload.p_promo_discount_pct = Number(promo.discount_pct || promo.discount || 0);
+      payload.p_promo_free_delivery = Boolean(promo.free_delivery || promo.freeDelivery);
+    }
+    const { data, error } = await sb.rpc('business_create_delivery', payload);
     if (error || !data?.success) {
       errEl.textContent = data?.error || error?.message || 'Erreur lors de l\'envoi';
       errEl.style.display = 'block';
