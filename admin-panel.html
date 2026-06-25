@@ -1491,8 +1491,8 @@ async function doLogin() {
       digits,                  // ce que l'utilisateur a tapé
     ].filter((v,i,a) => v.length >= 8 && a.indexOf(v)===i);
 
-    // Call backend API with JWT (SECURE)
-    const res = await fetch('/api/supabase?action=login', {
+    // Call backend API with JWT (SECURE) — use staffLogin for admin/agent/driver
+    const res = await fetch('/api/supabase?action=staffLogin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: phones[0], pw })
@@ -1562,8 +1562,13 @@ function logout() {
   // Nettoyer les données sensibles en mémoire
   _ordersAll = []; _clientsAll = [];
   sessionStorage.removeItem('_re_auth');
-  // Retourner sur la landing au lieu d'afficher le login inline
-  window.location.href = './index.html';
+  // Rester sur la page et afficher le login screen
+  document.getElementById('main-app').style.display = 'none';
+  document.getElementById('sidebar').style.display = 'none';
+  document.getElementById('login-page').style.display = 'flex';
+  document.getElementById('login-phone').value = '';
+  document.getElementById('login-pw').value = '';
+  document.getElementById('login-err').style.display = 'none';
 }
 
 // login-pw listener moved to DOMContentLoaded below

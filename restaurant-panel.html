@@ -537,13 +537,13 @@ async function doLogin() {
 
   btn.disabled = true; btn.textContent = 'Connexion...';
   try {
-    const phones = cleanPhone(rawPhone);
+    const phonesVariants = cleanPhone(rawPhone);
 
     // Call backend API with JWT (SECURE)
     const res = await fetch('/api/supabase?action=login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phones[0], pw })
+      body: JSON.stringify({ phone: phonesVariants[0], pw })
     });
 
     const data = await res.json();
