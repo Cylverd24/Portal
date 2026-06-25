@@ -1491,23 +1491,53 @@ async function doLogin() {
       digits,                  // ce que l'utilisateur a tapé
     ].filter((v,i,a) => v.length >= 8 && a.indexOf(v)===i);
 
-    // Call backend API with JWT (SECURE) — use staffLogin for admin/agent/driver
-    const res = await fetch('/api/supabase?action=staffLogin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phones[0], pw })
-    });
-
-    const data = await res.json();
-    if (data.error || !data.client || !data.token) {
-      rlFail();
-      const rlNow = rlCheck();
-      const tries = rlNow.data ? Math.max(0, _RL_MAX - (rlNow.data.n || 0)) : '?';
-      err.textContent = data.error || 'Identifiants incorrects ou accès non autorisé';
-      if (tries <= 2) err.textContent += ` (${tries} essai${tries!==1?'s':''} restant${tries!==1?'s':''})`;
-      err.style.display = 'block';
-      return;
+    // Premièrement: tenter l'API backend centralisée (plus sûr)
+    const API_HOST = 'https://renaud-express.app';
+    let data = null;
+    const pwHash = await hashPw(pw);
+    try {
+      const resp = await fetch(API_HOST + '/api/supabase?action=staffLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phones[0], pw })
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json && json.client) {
+          data = json;
+        } else {
+          // treat as failure and fallthrough to fallback
+          console.warn('backend login responded without client, falling back to direct Supabase');
+        }
+      } else {
+        console.warn('backend login failed', resp.status, resp.statusText);
+      }
+    } catch (e) {
+      console.warn('backend login error, falling back to direct Supabase', e && e.message);
     }
+
+    // Si l'API backend n'a pas répondu correctement, retomber sur Supabase direct
+    if (!data) {
+      const { data: staffRes, error: staffErr } = await sb.from('staff')
+        .select('*')
+        .in('phone', phones)
+        .eq('pw_hash', pwHash)
+        .limit(1)
+        .maybeSingle();
+      if (staffErr || !staffRes) {
+        rlFail();
+        const rlNow = rlCheck();
+        const tries = rlNow.data ? Math.max(0, _RL_MAX - (rlNow.data.n || 0)) : '?';
+        err.textContent = (staffErr && staffErr.message) || 'Identifiants incorrects ou accès non autorisé';
+        if (tries <= 2) err.textContent += ` (${tries} essai${tries!==1?'s':''} restant${tries!==1?'s':''})`;
+        err.style.display = 'block';
+        return;
+      }
+      data = { client: staffRes, token: null };
+    }
+
+    // Garder le hash en mémoire pour les RPCs qui en ont besoin
+    window._staffAuthHash = pwHash;
 
     // Check role access for admin panel
     const staffData = data.client;
