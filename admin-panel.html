@@ -1499,7 +1499,8 @@ async function doLogin() {
       const resp = await fetch(API_HOST + '/api/supabase?action=staffLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phones[0], pw })
+        // Send all phone variants + pwHash to avoid phone-format mismatches
+        body: JSON.stringify({ phones, pwHash })
       });
       if (resp.ok) {
         const json = await resp.json();
