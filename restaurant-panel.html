@@ -437,6 +437,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 //  STATE
 // ══════════════════════════════════════════
 let _user       = null;   // staff row
+let _authToken  = null;   // JWT token for authentication
 let _resto      = null;   // restaurant row
 let _orders     = [];     // all orders for this restaurant
 let _menuItems  = [];     // all menu items for this restaurant
@@ -536,29 +537,50 @@ async function doLogin() {
 
   btn.disabled = true; btn.textContent = 'Connexion...';
   try {
-    const hash   = await sha256(pw + SALT);
     const phones = cleanPhone(rawPhone);
 
-    const { data, error } = await sb.from('staff')
-      .select('*')
-      .in('phone', phones)
-      .eq('pw_hash', hash)
-      .eq('active', true)
-      .eq('role', 'owner')
-      .single();
+    // Call backend API with JWT (SECURE)
+    const res = await fetch('/api/supabase?action=login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phones[0], pw })
+    });
 
-    if (error || !data) { errEl.textContent='Identifiants incorrects ou accès non autorisé'; errEl.style.display='block'; return; }
+    const data = await res.json();
+    if (data.error || !data.client || !data.token) { 
+      errEl.textContent = data.error || 'Identifiants incorrects'; 
+      errEl.style.display = 'block'; 
+      btn.disabled = false;
+      btn.textContent = 'Se connecter →';
+      return; 
+    }
 
-    _user = data;
+    _user = data.client;
+    _authToken = data.token;
+    localStorage.setItem('auth_token', _authToken);
+    localStorage.setItem('user', JSON.stringify(_user));
 
-    if (!data.restaurant_id) { errEl.textContent='Aucun restaurant associé à ce compte. Contacter l\'admin.'; errEl.style.display='block'; return; }
+    if (!_user.restaurant_id) { 
+      errEl.textContent = 'Aucun restaurant associé à ce compte. Contacter l\'admin.'; 
+      errEl.style.display = 'block'; 
+      return; 
+    }
 
-    // Charger le restaurant
-    const { data: resto } = await sb.from('restaurants').select('*').eq('id', data.restaurant_id).single();
-    if (!resto) { errEl.textContent='Restaurant introuvable'; errEl.style.display='block'; return; }
-    _resto = resto;
+    const restaurantRes = await fetch('/api/supabase?action=getRestaurantData', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${_authToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    const restaurantData = await restaurantRes.json();
+    if (!restaurantRes.ok || restaurantData.error || !restaurantData.restaurant) {
+      errEl.textContent = restaurantData.error || 'Restaurant introuvable'; 
+      errEl.style.display = 'block'; 
+      return; 
+    }
+    _resto = restaurantData.restaurant;
 
-    // Lancer l'app
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     initApp();
@@ -572,8 +594,14 @@ async function doLogin() {
 }
 
 function doLogout() {
-  _user=null; _resto=null; _orders=[]; _menuItems=[];
-  if (_realtimeSub) { _realtimeSub.unsubscribe(); _realtimeSub=null; }
+  _user = null;
+  _authToken = null;
+  _resto = null;
+  _orders = [];
+  _menuItems = [];
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('user');
+  if (_realtimeSub) { _realtimeSub.unsubscribe(); _realtimeSub = null; }
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('l-pw').value = '';
@@ -660,14 +688,37 @@ function playAlert() {
 //  DATA LOADING
 // ══════════════════════════════════════════
 async function loadOrders() {
+  if (!_authToken) {
+    console.warn('No auth token');
+    return;
+  }
+
+  // Call backend API with JWT token
+  const res = await fetch('/api/supabase?action=getOrders', {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (res.status === 401) {
+    // Token expired
+    toast('Session expirée', 'Veuillez vous reconnecter', 'error');
+    doLogout();
+    return;
+  }
+
+  const data = await res.json();
+  if (data.error) {
+    console.warn('loadOrders error:', data.error);
+    return;
+  }
+
   const today = new Date(); today.setHours(0,0,0,0);
-  const { data } = await sb.from('orders')
-    .select('*')
-    .gte('created_at', today.toISOString())
-    .order('created_at', { ascending: false });
   
   // Filter orders that contain items from our restaurant
-  _orders = (data||[]).filter(o => {
+  _orders = ((data.orders || [])).filter(o => {
     const items = getOrderItems(o);
     return items.some(i => i.svc==='restaurant' && i.meta?.resto===_resto.name);
   });
@@ -675,8 +726,21 @@ async function loadOrders() {
 }
 
 async function loadMenuItems() {
-  const { data } = await sb.from('menu_items').select('*').eq('restaurant_id', _resto.id).order('category');
-  _menuItems = data || [];
+  const params = new URLSearchParams({
+    action: 'query',
+    table: 'menu_items',
+    restaurant_id: `eq.${_resto.id}`,
+    order: 'category'
+  });
+  const res = await fetch(`/api/supabase?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  const data = await res.json();
+  _menuItems = Array.isArray(data.data) ? data.data : [];
 }
 
 // ══════════════════════════════════════════
@@ -853,10 +917,18 @@ async function acceptOrder(id) {
   await updateStatus(id, 'confirmed');
   const o = _orders.find(x=>x.id===id);
   if (o?.client_id) {
-    await sb.from('notifications').insert({
-      user_id: o.client_id, user_type:'client',
-      message: `✅ Votre commande a été confirmée par ${_resto.name} ! Préparation en cours...`,
-      type: 'order', read: false
+    await fetch('/api/supabase?action=createNotification', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${_authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        userId: o.client_id,
+        userType: 'client',
+        message: `✅ Votre commande a été confirmée par ${_resto.name} ! Préparation en cours...`,
+        type: 'order'
+      })
     });
   }
 }
@@ -865,16 +937,31 @@ async function rejectOrder(id) {
   await updateStatus(id, 'cancelled');
   const o = _orders.find(x=>x.id===id);
   if (o?.client_id) {
-    await sb.from('notifications').insert({
-      user_id: o.client_id, user_type:'client',
-      message: `❌ Votre commande chez ${_resto.name} a été annulée. Vous pouvez passer une nouvelle commande.`,
-      type: 'order', read: false
+    await fetch('/api/supabase?action=createNotification', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${_authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        userId: o.client_id,
+        userType: 'client',
+        message: `❌ Votre commande chez ${_resto.name} a été annulée. Vous pouvez passer une nouvelle commande.`,
+        type: 'order'
+      })
     });
   }
 }
 
 async function updateStatus(id, status) {
-  await sb.from('orders').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+  await fetch('/api/supabase?action=updateOrderStatus', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ orderId: id, status })
+  });
   const idx = _orders.findIndex(o=>o.id===id);
   if (idx>=0) _orders[idx] = { ..._orders[idx], status };
   updateBadge();
@@ -926,7 +1013,14 @@ function filterMenuCat(cat) {
 }
 
 async function toggleItemAvailability(id, available) {
-  await sb.from('menu_items').update({ available }).eq('id', id);
+  await fetch('/api/supabase?action=updateMenuItemAvailability', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ itemId: id, available })
+  });
   const idx = _menuItems.findIndex(i=>i.id===id);
   if (idx>=0) _menuItems[idx].available = available;
   toast(available?'Plat disponible':'Plat indisponible', '', available?'success':'warning');
@@ -980,13 +1074,28 @@ async function saveMenuItem() {
   const payload = { name, price, category:cat, description:desc, img:img||'', restaurant_id:_resto.id, active:true, available:true };
 
   if (_editItemId) {
-    await sb.from('menu_items').update(payload).eq('id', _editItemId);
+    await fetch('/api/supabase?action=updateMenuItem', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${_authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ itemId: _editItemId, updates: payload })
+    });
     const idx = _menuItems.findIndex(i=>i.id===_editItemId);
     if (idx>=0) _menuItems[idx] = { ..._menuItems[idx], ...payload };
     toast('Plat mis à jour ✓','','success');
   } else {
-    const { data } = await sb.from('menu_items').insert(payload).select().single();
-    if (data) _menuItems.push(data);
+    const res = await fetch('/api/supabase?action=createMenuItem', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${_authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data?.data) _menuItems.push(data.data);
     toast('Plat ajouté ✓','','success');
   }
   closeModal('item-modal');
@@ -996,7 +1105,14 @@ async function saveMenuItem() {
 async function deleteMenuItem() {
   if (!_editItemId) return;
   if (!confirm('Supprimer ce plat du menu ?')) return;
-  await sb.from('menu_items').delete().eq('id', _editItemId);
+  await fetch('/api/supabase?action=deleteMenuItem', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ itemId: _editItemId })
+  });
   _menuItems = _menuItems.filter(i=>i.id!==_editItemId);
   closeModal('item-modal');
   renderMenu();
@@ -1026,8 +1142,16 @@ async function saveProfile() {
     min_order:     Number(document.getElementById('p-minorder').value)||0,
   };
   if (!payload.name) { toast('Nom requis','','error'); return; }
-  const { error } = await sb.from('restaurants').update(payload).eq('id', _resto.id);
-  if (error) { toast('Erreur: '+error.message,'','error'); return; }
+  const res = await fetch('/api/supabase?action=updateRestaurantInfo', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ updates: payload })
+  });
+  const data = await res.json();
+  if (data.error) { toast('Erreur: '+data.error,'','error'); return; }
   _resto = { ..._resto, ...payload };
   document.getElementById('tb-name').textContent = _resto.name;
   toast('Profil mis à jour ✓','','success');
@@ -1039,7 +1163,16 @@ async function changePassword() {
   if (!np || np.length < 6) { toast('Mot de passe trop court (min 6 caractères)','','error'); return; }
   if (np !== cp) { toast('Les mots de passe ne correspondent pas','','error'); return; }
   const hash = await sha256(np + SALT);
-  await sb.from('staff').update({ pw_hash: hash }).eq('id', _user.id);
+  const res = await fetch('/api/supabase?action=changeStaffPassword', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ pwHash: hash })
+  });
+  const data = await res.json();
+  if (data.error) { toast('Erreur: '+data.error,'','error'); return; }
   document.getElementById('p-newpw').value = '';
   document.getElementById('p-confirmpw').value = '';
   toast('Mot de passe changé ✓','','success');
@@ -1050,7 +1183,16 @@ async function changePassword() {
 // ══════════════════════════════════════════
 async function toggleRestaurantOpen() {
   const newState = !(_resto.is_open !== false);
-  await sb.from('restaurants').update({ is_open: newState }).eq('id', _resto.id);
+  const res = await fetch('/api/supabase?action=toggleRestaurantStatus', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ isOpen: newState })
+  });
+  const data = await res.json();
+  if (data.error) { toast('Erreur: '+data.error,'','error'); return; }
   _resto.is_open = newState;
   updateOpenStatus();
   toast(newState?'Restaurant ouvert 🟢':'Restaurant fermé 🔴','', newState?'success':'warning');

@@ -1480,9 +1480,7 @@ async function doLogin() {
   if (btn) { btn.textContent = 'Connexion...'; btn.disabled = true; }
 
   try {
-    const hash = await hashPw(pw);
-
-    // Générer toutes les variantes possibles du numéro
+    // Générer toutes les variantes possibles du numéro (pour l'API)
     const digits = raw.replace(/\D/g,'');
     const local  = digits.replace(/^241/,'').replace(/^0/,'');   // ex: 77000000
     const phones = [
@@ -1491,46 +1489,52 @@ async function doLogin() {
       '0' + local,             // 077000000
       local,                   // 77000000
       digits,                  // ce que l'utilisateur a tapé
-    ].filter((v,i,a) => v.length >= 8 && a.indexOf(v)===i); // dédupliqué
+    ].filter((v,i,a) => v.length >= 8 && a.indexOf(v)===i);
 
-    const { data: staffRows, error: fetchErr } = await sb
-      .from('staff').select('id,name,phone,role,active,zone,vehicule,email,rating,trips,online,joined_at,pw_hash')
-      .in('phone', phones).eq('active', true).in('role', ['admin','agent','driver']);
+    // Call backend API with JWT (SECURE)
+    const res = await fetch('/api/supabase?action=login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phones[0], pw })
+    });
 
-    if (fetchErr) {
-      rlFail();
-      err.textContent = 'Erreur de connexion : ' + esc(fetchErr.message);
-      err.style.display = 'block'; return;
-    }
-
-    const data = (staffRows||[]).find(s => s.pw_hash === hash);
-    if (!data) {
+    const data = await res.json();
+    if (data.error || !data.client || !data.token) {
       rlFail();
       const rlNow = rlCheck();
       const tries = rlNow.data ? Math.max(0, _RL_MAX - (rlNow.data.n || 0)) : '?';
-      const exists = (staffRows||[]).length > 0;
-      err.textContent = (exists ? 'Mot de passe incorrect' : 'Aucun compte trouvé pour ce numéro')
-        + (tries <= 2 ? ` (${tries} essai${tries!==1?'s':''} restant${tries!==1?'s':''})` : '');
-      err.style.display = 'block'; return;
+      err.textContent = data.error || 'Identifiants incorrects ou accès non autorisé';
+      if (tries <= 2) err.textContent += ` (${tries} essai${tries!==1?'s':''} restant${tries!==1?'s':''})`;
+      err.style.display = 'block';
+      return;
+    }
+
+    // Check role access for admin panel
+    const staffData = data.client;
+    if (!['admin', 'agent', 'driver'].includes(staffData.role)) {
+      rlFail();
+      err.textContent = 'Accès refusé : rôle insuffisant';
+      err.style.display = 'block';
+      return;
     }
 
     // Succès
     rlClear();
-    window._staffAuthHash = data.pw_hash; // gardé en mémoire uniquement pour signer les appels RPC sécurisés, jamais affiché/loggé
-    currentUser = { ...data }; delete currentUser.pw_hash; // ne jamais garder le hash dans l'objet visible
+    window._authToken = data.token; // Store JWT
+    currentUser = { ...staffData }; // Store user info
     _resetSession();
     sessionStorage.setItem('_re_auth', '1'); // marquer session active
 
-    if (data.role === 'driver') {
+    if (staffData.role === 'driver') {
       document.getElementById('login-page').style.display = 'none';
-      launchDriverApp(data);
+      launchDriverApp(staffData);
       return;
     }
 
     // ── Affichage rôle dans la sidebar ──
-    document.getElementById('sidebar-name').textContent = esc(data.name);
-    document.getElementById('sidebar-avatar').textContent = (data.name||'?')[0].toUpperCase();
-    const isAdmin = data.role === 'admin';
+    document.getElementById('sidebar-name').textContent = esc(staffData.name);
+    document.getElementById('sidebar-avatar').textContent = (staffData.name||'?')[0].toUpperCase();
+    const isAdmin = staffData.role === 'admin';
     document.getElementById('sidebar-role-badge').textContent = isAdmin ? '👑 Admin' : '🎧 Agent';
     document.getElementById('sidebar-role-badge').style.cssText = isAdmin
       ? 'background:rgba(255,140,0,.25);color:#ffd166;font-size:10px;padding:1px 7px;border-radius:10px;display:inline-block;margin-top:2px;font-weight:700'
@@ -1554,7 +1558,7 @@ function logout() {
   if (_realtimeSub) { try{ sb.removeChannel(_realtimeSub); }catch(e){} _realtimeSub = null; }
   if (_sTimer) { clearTimeout(_sTimer); _sTimer = null; }
   currentUser = null;
-  window._staffAuthHash = null;
+  window._authToken = null; // Clear JWT token
   // Nettoyer les données sensibles en mémoire
   _ordersAll = []; _clientsAll = [];
   sessionStorage.removeItem('_re_auth');
@@ -1783,7 +1787,8 @@ function searchOrders(q) {
 }
 
 async function updateOrderStatus(id, status) {
-  const {data:res,error} = await sb.rpc('admin_update_order_status',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:id,p_status:status});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error} = await sb.rpc('admin_update_order_status',{p_staff_id:currentUser.id,p_order_id:id,p_status:status}, { headers });
   if (error || !res?.success) { toast(res?.error || 'Erreur lors du changement de statut','error'); return; }
 
   // ── Notification client Supabase ──────────────────────
@@ -1955,7 +1960,8 @@ async function openAssignModal(orderId) {
 }
 
 async function assignDriver(orderId, driverId, driverName) {
-  const {data:res,error}=await sb.rpc('admin_assign_driver',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:orderId,p_driver_id:driverId,p_driver_name:driverName});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('admin_assign_driver',{p_staff_id:currentUser.id,p_order_id:orderId,p_driver_id:driverId,p_driver_name:driverName}, { headers });
   if (error || !res?.success) { toast(res?.error || 'Erreur lors de l\'assignation','error'); return; }
 
   // ── Notification client : livreur assigné ──────────────────────────────
@@ -2175,17 +2181,18 @@ async function saveDriver() {
   if (!name||!phone) return alert('Nom et téléphone requis');
   if (!id && !pw) return alert('Mot de passe requis pour un nouveau livreur');
   const zone=document.getElementById('d-zone').value, vehicule=document.getElementById('d-vehicle').value, email=document.getElementById('d-email').value;
-  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id||null,p_name:name,p_phone:phone,p_role:'driver',p_zone:zone,p_vehicule:vehicule,p_email:email});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_target_id:id||null,p_name:name,p_phone:phone,p_role:'driver',p_zone:zone,p_vehicule:vehicule,p_email:email}, { headers });
   if (error || !res?.success) { toast(res?.error || 'Erreur lors de l\'enregistrement','error'); return; }
   if (pw) {
     const newHash = await hashPw(pw);
     const targetId = id || res.id;
-    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:targetId,p_new_pw_hash:newHash});
+    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_target_id:targetId,p_new_pw_hash:newHash}, { headers });
   }
   toast(id?'Livreur mis à jour':'Livreur ajouté');
   closeModal('driver-modal'); loadDrivers();
 }
-async function toggleDriverActive(id, active) { const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_active:active}); if(error||!res?.success){toast(res?.error||'Erreur','error');return;} toast(active?'Livreur activé':'Livreur désactivé'); loadDrivers(); }
+async function toggleDriverActive(id, active) { const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {}; const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_target_id:id,p_active:active}, { headers }); if(error||!res?.success){toast(res?.error||'Erreur','error');return;} toast(active?'Livreur activé':'Livreur désactivé'); loadDrivers(); }
 async function deleteDriver(id) { if (!confirm('Supprimer ce livreur ?')) return; await sb.from('staff').delete().eq('id',id); toast('Livreur supprimé'); loadDrivers(); }
 
 // ── AGENTS ─────────────────────────────────────
@@ -2241,17 +2248,18 @@ async function saveAgent() {
   const email=document.getElementById('ag-email').value;
   const zone = role==='driver' ? (document.getElementById('ag-zone').value||'') : null;
   const vehicule = role==='driver' ? (document.getElementById('ag-vehicle').value||'') : null;
-  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id||null,p_name:name,p_phone:phone,p_role:role,p_zone:zone,p_vehicule:vehicule,p_email:email});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_target_id:id||null,p_name:name,p_phone:phone,p_role:role,p_zone:zone,p_vehicule:vehicule,p_email:email}, { headers });
   if (error || !res?.success) { toast(res?.error || 'Erreur lors de l\'enregistrement','error'); closeModal('agent-modal'); return; }
   if (pw) {
     const newHash = await hashPw(pw);
     const targetId = id || res.id;
-    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:targetId,p_new_pw_hash:newHash});
+    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_target_id:targetId,p_new_pw_hash:newHash}, { headers });
   }
   toast(id?'Profil mis à jour':(role==='admin'?'👑 Admin créé':role==='driver'?'🏍️ Livreur créé':'🎧 Agent créé'));
   closeModal('agent-modal'); loadAgents();
 }
-async function toggleAgent(id, active) { const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_active:active}); if(error||!res?.success){toast(res?.error||'Erreur','error');return;} toast(active?'Agent activé':'Agent désactivé'); loadAgents(); }
+async function toggleAgent(id, active) { const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {}; const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_target_id:id,p_active:active}, { headers }); if(error||!res?.success){toast(res?.error||'Erreur','error');return;} toast(active?'Agent activé':'Agent désactivé'); loadAgents(); }
 async function deleteAgent(id) { if (!confirm('Supprimer cet agent ?')) return; await sb.from('staff').delete().eq('id',id); toast('Agent supprimé'); loadAgents(); }
 
 // ── PRODUITS ───────────────────────────────────
@@ -3676,13 +3684,15 @@ function _missionCard(o, canAccept) {
 }
 
 async function drvAcceptOrder(orderId) {
-  const {data:res,error}=await sb.rpc('staff_accept_order',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:orderId});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('staff_accept_order',{p_staff_id:currentUser.id,p_order_id:orderId}, { headers });
   if (error || !res?.success) return toast(res?.error || 'Cette course a déjà été acceptée','error');
   toast('🏍️ Course acceptée !'); loadDriverMissions();
 }
 
 async function drvStartDelivery(orderId) {
-  const {data:res,error}=await sb.rpc('staff_mark_delivering',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:orderId});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('staff_mark_delivering',{p_staff_id:currentUser.id,p_order_id:orderId}, { headers });
   if (error || !res?.success) return toast(res?.error || 'Impossible de démarrer la livraison','error');
   toast('🏍️ Livraison démarrée !'); loadDriverMissions();
 }
@@ -3698,10 +3708,16 @@ async function drvMarkDelivered() {
   }
   if (!window.confirm('Confirmer la livraison ?')) return;
   const ordId=_activeOrderId;
+  
+  // Use JWT authentication instead of old pw_hash
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  
   const {data:res,error}=await sb.rpc('staff_mark_delivered',{
-    p_staff_id:currentUser.id, p_pw_hash:window._staffAuthHash,
-    p_order_id:ordId, p_delivery_code:String(window._activeDeliveryCode||'')
-  });
+    p_staff_id:currentUser.id,
+    p_order_id:ordId, 
+    p_delivery_code:String(window._activeDeliveryCode||'')
+  }, { headers });
+  
   if (error || !res?.success) { toast(res?.error || 'Erreur lors de la confirmation de livraison','error'); return; }
   currentUser.trips=(currentUser.trips||0)+1;
   document.getElementById('drv-profile-trips').textContent=currentUser.trips;
@@ -3753,12 +3769,27 @@ async function drvStartQrScanner() {
     status.textContent = '📷 Pointez vers le QR code du client...';
     // Charger jsQR si pas encore disponible
     if (typeof jsQR === 'undefined') {
-      await new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-        s.onload = resolve; s.onerror = reject;
-        document.head.appendChild(s);
-      });
+      try {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+          s.onload = resolve;
+          s.onerror = () => reject(new Error('jsQR CDN load failed'));
+          s.async = true;
+          document.head.appendChild(s);
+        });
+      } catch(jsqrErr) {
+        status.textContent = '⚠️ Erreur chargement libr. QR — utilisez la saisie manuelle';
+        console.error('jsQR load error:', jsqrErr);
+        drvStopQrScanner();
+        return;
+      }
+    }
+    // Double check jsQR is available
+    if (typeof jsQR !== 'function') {
+      status.textContent = '⚠️ jsQR indisponible — utilisez la saisie manuelle';
+      drvStopQrScanner();
+      return;
     }
     _drvScanQrFrame();
   } catch(e) {
@@ -3789,13 +3820,13 @@ function _drvScanQrFrame() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     try {
-      const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts:'dontInvert' });
+      const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 0 });
       if (code && code.data) {
         drvStopQrScanner();
         _drvHandleQrResult(code.data);
         return;
       }
-    } catch(e) {}
+    } catch(e) { console.warn('QR scan error:', e); }
     _qrScanInterval = requestAnimationFrame(scan);
   }
   _qrScanInterval = requestAnimationFrame(scan);
@@ -3829,6 +3860,11 @@ function drvValidateCode() {
   }
   if (!raw || raw.replace(/\D/g,'').length < 1) {
     toast('Saisissez le code à 4 chiffres du client', 'error');
+    if (input) input.style.borderColor = '#EF4444';
+    return;
+  }
+  if (entered.length !== 4 || !/^\d{4}$/.test(entered)) {
+    toast('Le code doit contenir exactement 4 chiffres', 'error');
     if (input) input.style.borderColor = '#EF4444';
     return;
   }
@@ -3885,10 +3921,14 @@ async function drvConfirmTransfer() {
   const targetId=document.getElementById('drv-transfer-target').value||null;
   const targetNameRaw=targetId?document.getElementById('drv-transfer-target').selectedOptions[0]?.text:null;
   const targetName=targetNameRaw?targetNameRaw.replace(/^🏍️\s*/,'').split(' —')[0]:null;
+  
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  
   const {data:res,error}=await sb.rpc('staff_transfer_order',{
-    p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_order_id:_activeOrderId,
+    p_staff_id:currentUser.id,p_order_id:_activeOrderId,
     p_target_driver_id:targetId,p_target_driver_name:targetName,p_reason:_transferReason
-  });
+  }, { headers });
+  
   if (error || !res?.success) return toast(res?.error || 'Erreur : '+(error?.message||'inconnue'),'error');
   await sb.from('notifications').insert({user_id:null,user_type:'admin',
     message:`🔄 ${currentUser.name} a transféré #${String(_activeOrderId).slice(-6)} — Raison : ${_transferReason}${targetName?' → '+targetName.replace(/^🏍️\s*/,'').split(' —')[0]:' (pool)'}`,
@@ -4207,12 +4247,13 @@ async function saveOwner() {
   if (!id && !pw) { errEl.textContent='Mot de passe requis'; errEl.style.display='block'; return; }
   if (!id && pw.length < 6) { errEl.textContent='Mot de passe trop court (min 6 car.)'; errEl.style.display='block'; return; }
 
-  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id||null,p_name:name,p_phone:phone,p_role:'owner',p_restaurant_id:restoId,p_email:email,p_active:active});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('admin_upsert_staff',{p_staff_id:currentUser.id,p_target_id:id||null,p_name:name,p_phone:phone,p_role:'owner',p_restaurant_id:restoId,p_email:email,p_active:active}, { headers });
   if (error || !res?.success) { errEl.textContent='Erreur: '+(res?.error||error?.message||'inconnue'); errEl.style.display='block'; return; }
   if (pw) {
     const newHash = await hashPw(pw);
     const targetId = id || res.id;
-    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:targetId,p_new_pw_hash:newHash});
+    await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_target_id:targetId,p_new_pw_hash:newHash}, { headers });
   }
 
   closeModal('owner-modal');
@@ -4221,7 +4262,8 @@ async function saveOwner() {
 }
 
 async function toggleOwnerActive(id, active) {
-  const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_active:active});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('admin_toggle_staff_active',{p_staff_id:currentUser.id,p_target_id:id,p_active:active}, { headers });
   if (error || !res?.success) { toast(res?.error || 'Erreur','error'); return; }
   toast(active ? 'Compte activé' : 'Compte désactivé');
   loadOwners();
@@ -4231,7 +4273,8 @@ async function resetOwnerPw(id, name) {
   const np = prompt(`Nouveau mot de passe pour ${name} :`);
   if (!np || np.length < 6) { alert('Mot de passe trop court (min 6 caractères)'); return; }
   const hash = await hashPw(np);
-  const {data:res,error}=await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_pw_hash:window._staffAuthHash,p_target_id:id,p_new_pw_hash:hash});
+  const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
+  const {data:res,error}=await sb.rpc('admin_set_staff_password',{p_staff_id:currentUser.id,p_target_id:id,p_new_pw_hash:hash}, { headers });
   if (error || !res?.success) { toast(res?.error || 'Erreur','error'); return; }
   toast('Mot de passe réinitialisé ✓');
 }
@@ -4772,9 +4815,9 @@ async function saveImgModal() {
           <!-- Mode Saisie manuelle -->
           <div id="drv-mode-code">
             <div style="display:flex;gap:8px;align-items:center">
-              <input id="drv-code-input" type="number" maxlength="4" placeholder="0000"
-                style="flex:1;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.15);border-radius:10px;padding:12px 14px;color:#fff;font-size:22px;font-weight:900;letter-spacing:8px;text-align:center;outline:none;font-family:monospace;-moz-appearance:textfield"
-                oninput="this.value=this.value.slice(0,4)"
+              <input id="drv-code-input" type="text" inputmode="numeric" maxlength="4" placeholder="0000"
+                style="flex:1;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.15);border-radius:10px;padding:12px 14px;color:#fff;font-size:22px;font-weight:900;letter-spacing:8px;text-align:center;outline:none;font-family:monospace"
+                oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,4)"
                 onfocus="this.style.borderColor='#3B82F6'" onblur="this.style.borderColor='rgba(255,255,255,.15)'"/>
               <button onclick="drvValidateCode()" class="drv-btn primary" style="padding:12px 16px;font-size:16px">✓</button>
             </div>

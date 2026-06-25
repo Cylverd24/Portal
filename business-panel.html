@@ -354,8 +354,8 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 // ══════════════════════════════════════════
 //  STATE
 // ══════════════════════════════════════════
-let _user = null;       // staff row (role='business')
-let _authHash = null;   // pw_hash, gardé en mémoire uniquement pour signer les appels RPC
+let _user = null;       // client row (role='business')
+let _authToken = null;  // JWT token from backend
 let _orders = [];
 let _promos = [];
 let _currentFilter = 'all';
@@ -428,21 +428,29 @@ async function doLogin() {
 
   btn.disabled = true; btn.textContent = 'Connexion...';
   try {
-    const hash   = await sha256(pw + SALT);
     const phones = cleanPhone(rawPhone);
+    
+    // Call backend API with JWT (SECURE)
+    const res = await fetch('/api/supabase?action=login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phones[0], pw })
+    });
 
-    const { data, error } = await sb.from('staff')
-      .select('*')
-      .in('phone', phones)
-      .eq('pw_hash', hash)
-      .eq('active', true)
-      .eq('role', 'business')
-      .single();
+    const data = await res.json();
+    if (data.error || !data.client || !data.token) { 
+      errEl.textContent = data.error || 'Identifiants incorrects'; 
+      errEl.style.display = 'block'; 
+      btn.disabled = false;
+      btn.textContent = 'Se connecter →';
+      return; 
+    }
 
-    if (error || !data) { errEl.textContent='Identifiants incorrects ou accès non autorisé'; errEl.style.display='block'; return; }
-
-    _user = data;
-    _authHash = hash; // gardé en mémoire uniquement, jamais affiché/loggé, pour signer les RPC
+    // SECURITY: Store JWT token (not password!)
+    _user = data.client;
+    _authToken = data.token;
+    localStorage.setItem('auth_token', _authToken);
+    localStorage.setItem('user', JSON.stringify(_user));
 
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
@@ -457,7 +465,11 @@ async function doLogin() {
 }
 
 function doLogout() {
-  _user=null; _authHash=null; _orders=[];
+  _user = null;
+  _authToken = null;
+  _orders = [];
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('user');
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('l-pw').value = '';
@@ -501,22 +513,69 @@ function showPage(id) {
 //  ORDERS
 // ══════════════════════════════════════════
 async function loadOrders() {
-  const { data, error } = await sb.rpc('business_get_orders', { p_staff_id: _user.id, p_pw_hash: _authHash });
-  if (error) { console.warn('loadOrders error:', error); return; }
-  _orders = data || [];
+  if (!_authToken) {
+    console.warn('No auth token');
+    return;
+  }
+  
+  // Call backend API with JWT token
+  const res = await fetch('/api/supabase?action=getOrders', {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (res.status === 401) {
+    // Token expired
+    toast('Session expirée', 'Veuillez vous reconnecter', 'error');
+    doLogout();
+    return;
+  }
+
+  const data = await res.json();
+  if (data.error) {
+    console.warn('loadOrders error:', data.error);
+    return;
+  }
+  
+  _orders = data.orders || [];
   renderDashboard();
   updateBadge();
   if (document.getElementById('page-orders').classList.contains('active')) renderOrders();
 }
 
 async function loadPromos() {
-  const { data, error } = await sb.from('promos').select('*').eq('active', true).order('created_at', { ascending: false });
-  if (error) {
-    console.warn('loadPromos error:', error);
+  if (!_authToken) {
+    console.warn('No auth token');
+    return;
+  }
+
+  // Call backend API with JWT token
+  const res = await fetch('/api/supabase?action=getPromos', {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (res.status === 401) {
+    // Token expired
+    toast('Session expirée', 'Veuillez vous reconnecter', 'error');
+    doLogout();
+    return;
+  }
+
+  const data = await res.json();
+  if (data.error) {
+    console.warn('loadPromos error:', data.error);
     _promos = [];
     return;
   }
-  _promos = data || [];
+
+  _promos = data.promos || [];
   renderPromoInfo();
 }
 
@@ -650,24 +709,44 @@ async function submitDelivery() {
   btn.disabled = true; btn.textContent = 'Envoi en cours...';
   try {
     const payload = {
-      p_staff_id: _user.id, p_pw_hash: _authHash,
-      p_pickup_address: pickup, p_delivery_address: delivery,
-      p_recipient_name: recipName, p_recipient_phone: recipPhone.replace(/\s/g,''),
+      p_pickup_address: pickup,
+      p_delivery_address: delivery,
+      p_recipient_name: recipName,
+      p_recipient_phone: recipPhone.replace(/\s/g, ''),
       p_description: desc
     };
+    
     if (promo) {
       payload.p_promo_code = promoCode;
       payload.p_promo_discount_pct = Number(promo.discount_pct || promo.discount || 0);
       payload.p_promo_free_delivery = Boolean(promo.free_delivery || promo.freeDelivery);
     }
-    const { data, error } = await sb.rpc('business_create_delivery', payload);
-    if (error || !data?.success) {
-      errEl.textContent = data?.error || error?.message || 'Erreur lors de l\'envoi';
+    
+    // Call backend API with JWT token
+    const res = await fetch('/api/supabase?action=createDelivery', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${_authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    if (res.status === 401) {
+      toast('Session expirée', 'Veuillez vous reconnecter', 'error');
+      doLogout();
+      return;
+    }
+    
+    const data = await res.json();
+    if (!data.success || data.error) {
+      errEl.textContent = data.error || 'Erreur lors de l\'envoi';
       errEl.style.display = 'block';
       return;
     }
+    
     toast('🚀 Demande envoyée !', 'Code de livraison : ' + data.code, 'success');
-    ['n-pickup','n-delivery','n-recipname','n-recipphone','n-desc'].forEach(id=>document.getElementById(id).value='');
+    ['n-pickup', 'n-delivery', 'n-recipname', 'n-recipphone', 'n-desc'].forEach(id => document.getElementById(id).value = '');
     await loadOrders();
     showPage('orders');
   } finally {
@@ -681,17 +760,33 @@ async function submitDelivery() {
 async function changePassword() {
   const oldPw = document.getElementById('p-oldpw').value;
   const newPw = document.getElementById('p-newpw').value;
-  if (!oldPw || !newPw || newPw.length < 6) { toast('Mot de passe invalide', 'Minimum 6 caractères', 'error'); return; }
+  if (!oldPw || !newPw || newPw.length < 6) { 
+    toast('Mot de passe invalide', 'Minimum 6 caractères', 'error'); 
+    return; 
+  }
 
-  const oldHash = await sha256(oldPw + SALT);
-  const newHash = await sha256(newPw + SALT);
-
-  const { data, error } = await sb.rpc('staff_change_own_password', {
-    p_staff_id: _user.id, p_old_pw_hash: oldHash, p_new_pw_hash: newHash
+  // Call backend API with JWT token
+  const res = await fetch('/api/supabase?action=changePassword', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${_authToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
   });
-  if (error || !data?.success) { toast('Erreur', data?.error || 'Mot de passe actuel incorrect', 'error'); return; }
 
-  _authHash = newHash;
+  if (res.status === 401) {
+    toast('Session expirée', 'Veuillez vous reconnecter', 'error');
+    doLogout();
+    return;
+  }
+
+  const data = await res.json();
+  if (!data.success || data.error) {
+    toast('Erreur', data.error || 'Mot de passe actuel incorrect', 'error');
+    return;
+  }
+
   document.getElementById('p-oldpw').value = '';
   document.getElementById('p-newpw').value = '';
   toast('✅ Mot de passe modifié');
