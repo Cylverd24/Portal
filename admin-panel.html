@@ -3965,38 +3965,77 @@ function drvSelectReason(btn, reason) {
 }
 
 async function drvConfirmTransfer() {
-  if (!_activeOrderId||!_transferReason) return;
-  const targetId=document.getElementById('drv-transfer-target').value||null;
-  const targetNameRaw=targetId?document.getElementById('drv-transfer-target').selectedOptions[0]?.text:null;
-  const targetName=targetNameRaw?targetNameRaw.replace(/^🏍️\s*/,'').split(' —')[0]:null;
-  
+  if (!_activeOrderId) { toast('Aucune course active à transférer','error'); return; }
+  if (!_transferReason) { toast('Sélectionnez une raison de transfert','error'); return; }
+  const targetId = document.getElementById('drv-transfer-target').value || null;
+  const targetNameRaw = targetId ? document.getElementById('drv-transfer-target').selectedOptions[0]?.text : null;
+  const targetName = targetNameRaw ? targetNameRaw.replace(/^🏍️\s*/,'').split(' —')[0] : null;
   const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
-  
-  let res, error;
-  ({data:res,error} = await sb.rpc('staff_transfer_order',{
-    p_staff_id:currentUser.id,p_order_id:_activeOrderId,
-    p_target_driver_id:targetId,p_target_driver_name:targetName,p_reason:_transferReason
-  }, { headers }));
 
-  const missingTransferFn = error && /(staff_transfer_order|function .* does not exist|function public\.staff_transfer_order)/i.test((error.message||error.details||'')+'');
-  if (missingTransferFn) {
-    const assignRes = await sb.rpc('admin_assign_driver',{
+  try {
+    let res, error;
+    const transferRes = await sb.rpc('staff_transfer_order', {
       p_staff_id: currentUser.id,
       p_order_id: _activeOrderId,
-      p_driver_id: targetId,
-      p_driver_name: targetName
+      p_target_driver_id: targetId,
+      p_target_driver_name: targetName,
+      p_reason: _transferReason
     }, { headers });
-    res = assignRes.data;
-    error = assignRes.error;
-  }
+    res = transferRes.data;
+    error = transferRes.error;
 
-  if (error || !res?.success) return toast(res?.error || 'Erreur : '+(error?.message||error?.details||'inconnue'),'error');
-  await sb.from('notifications').insert({user_id:null,user_type:'admin',
-    message:`🔄 ${currentUser.name} a transféré #${String(_activeOrderId).slice(-6)} — Raison : ${_transferReason}${targetName?' → '+targetName:' (pool)'}`,
-    type:'order_transferred',read:false});
-  document.getElementById('drv-transfer-modal').classList.remove('open');
-  _activeOrderId=null; document.getElementById('drv-active-order').style.display='none';
-  toast('🔄 Course transférée'); loadDriverMissions();
+    const staffTransferMissing = error && /(staff_transfer_order|function .* does not exist|function public\.staff_transfer_order)/i.test((error.message||error.details||'')+'');
+    const adminAssignMissing = error && /admin_assign_driver/i.test((error.message||error.details||'')+'');
+
+    if (staffTransferMissing || (error && !res?.success)) {
+      if (targetId) {
+        const assignRes = await sb.rpc('admin_assign_driver', {
+          p_staff_id: currentUser.id,
+          p_order_id: _activeOrderId,
+          p_driver_id: targetId,
+          p_driver_name: targetName
+        }, { headers });
+        res = assignRes.data;
+        error = assignRes.error;
+
+        if ((error && /(admin_assign_driver|function .* does not exist|function public\.admin_assign_driver)/i.test((error.message||error.details||'')+'')) || !res?.success) {
+          const updateRes = await sb.from('orders').update({
+            driver_id: targetId,
+            driver_name: targetName
+          }).eq('id', _activeOrderId).select().single();
+          if (updateRes.error) throw updateRes.error;
+          res = { success: true };
+          error = null;
+        }
+      } else {
+        const updateRes = await sb.from('orders').update({
+          driver_id: null,
+          driver_name: null
+        }).eq('id', _activeOrderId).select().single();
+        if (updateRes.error) throw updateRes.error;
+        res = { success: true };
+        error = null;
+      }
+    }
+
+    if (error || !res?.success) {
+      throw error || new Error('Erreur serveur inconnue');
+    }
+
+    await sb.from('notifications').insert({ user_id: null, user_type: 'admin',
+      message: `🔄 ${currentUser.name} a transféré #${String(_activeOrderId).slice(-6)} — Raison : ${_transferReason}${targetName ? ' → '+targetName : ' (pool)'}`,
+      type: 'order_transferred', read: false
+    });
+
+    document.getElementById('drv-transfer-modal').classList.remove('open');
+    _activeOrderId = null;
+    document.getElementById('drv-active-order').style.display = 'none';
+    toast('🔄 Course transférée');
+    loadDriverMissions();
+  } catch (e) {
+    console.error('drvConfirmTransfer error', e);
+    toast('Erreur transfert : ' + (e.message || e.details || 'inconnue'), 'error');
+  }
 }
 
 function drvReportIssue(){document.getElementById('drv-issue-modal').style.display='flex';}
