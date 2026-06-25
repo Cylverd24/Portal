@@ -3787,6 +3787,7 @@ function drvSwitchValidMode(mode, btn) {
 async function drvStartQrScanner() {
   const video  = document.getElementById('drv-qr-video');
   const status = document.getElementById('drv-qr-status');
+  status.textContent = '⌛ Demande d’accès caméra…';
   // Le navigateur bloque systématiquement la caméra hors contexte sécurisé (HTTPS),
   // même si l'utilisateur clique "Autoriser" -- ce n'est pas un choix de permission.
   if (!window.isSecureContext) {
@@ -3801,7 +3802,11 @@ async function drvStartQrScanner() {
     _qrStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } }
     });
-    video.srcObject = _qrStream;
+    if (video) {
+      video.srcObject = _qrStream;
+      video.style.display = 'block';
+      await video.play().catch(() => {});
+    }
     status.textContent = '📷 Pointez vers le QR code du client...';
     // Charger jsQR si pas encore disponible
     if (typeof jsQR === 'undefined') {
@@ -4838,11 +4843,11 @@ async function saveImgModal() {
 
           <!-- Tabs -->
           <div style="display:flex;gap:6px;margin-bottom:12px">
-            <button onclick="drvSwitchValidMode('code',this)" id="drv-mode-code-btn"
+            <button type="button" onclick="drvSwitchValidMode('code',this)" id="drv-mode-code-btn"
               style="flex:1;padding:8px;border-radius:9px;font-size:11px;font-weight:800;border:1.5px solid #3B82F6;background:rgba(59,130,246,.2);color:#60a5fa;cursor:pointer;font-family:var(--font)">
               ⌨️ Saisir code
             </button>
-            <button onclick="drvSwitchValidMode('scan',this)" id="drv-mode-scan-btn"
+            <button type="button" onclick="drvSwitchValidMode('scan',this)" id="drv-mode-scan-btn"
               style="flex:1;padding:8px;border-radius:9px;font-size:11px;font-weight:800;border:1.5px solid rgba(255,255,255,.15);background:rgba(255,255,255,.07);color:rgba(255,255,255,.5);cursor:pointer;font-family:var(--font)">
               📷 Scanner QR
             </button>
