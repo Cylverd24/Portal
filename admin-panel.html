@@ -3972,14 +3972,27 @@ async function drvConfirmTransfer() {
   
   const headers = window._authToken ? { 'Authorization': `Bearer ${window._authToken}` } : {};
   
-  const {data:res,error}=await sb.rpc('staff_transfer_order',{
+  let res, error;
+  ({data:res,error} = await sb.rpc('staff_transfer_order',{
     p_staff_id:currentUser.id,p_order_id:_activeOrderId,
     p_target_driver_id:targetId,p_target_driver_name:targetName,p_reason:_transferReason
-  }, { headers });
-  
-  if (error || !res?.success) return toast(res?.error || 'Erreur : '+(error?.message||'inconnue'),'error');
+  }, { headers }));
+
+  const missingTransferFn = error && /(staff_transfer_order|function .* does not exist|function public\.staff_transfer_order)/i.test((error.message||error.details||'')+'');
+  if (missingTransferFn) {
+    const assignRes = await sb.rpc('admin_assign_driver',{
+      p_staff_id: currentUser.id,
+      p_order_id: _activeOrderId,
+      p_driver_id: targetId,
+      p_driver_name: targetName
+    }, { headers });
+    res = assignRes.data;
+    error = assignRes.error;
+  }
+
+  if (error || !res?.success) return toast(res?.error || 'Erreur : '+(error?.message||error?.details||'inconnue'),'error');
   await sb.from('notifications').insert({user_id:null,user_type:'admin',
-    message:`🔄 ${currentUser.name} a transféré #${String(_activeOrderId).slice(-6)} — Raison : ${_transferReason}${targetName?' → '+targetName.replace(/^🏍️\s*/,'').split(' —')[0]:' (pool)'}`,
+    message:`🔄 ${currentUser.name} a transféré #${String(_activeOrderId).slice(-6)} — Raison : ${_transferReason}${targetName?' → '+targetName:' (pool)'}`,
     type:'order_transferred',read:false});
   document.getElementById('drv-transfer-modal').classList.remove('open');
   _activeOrderId=null; document.getElementById('drv-active-order').style.display='none';
